@@ -1,0 +1,53 @@
+spring:
+  application:
+    name: stellorbit-service
+  datasource:
+    url: ${STELLORBIT_DATASOURCE_URL:jdbc:postgresql://localhost:5432/stellorbit}
+    username: ${STELLORBIT_DATASOURCE_USERNAME:postgres}
+    password: ${STELLORBIT_DATASOURCE_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        default_schema: stellorbit
+        format_sql: true
+  sql:
+    init:
+      mode: never
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+
+stellorbit:
+  cue:
+    binary: ${STELLORBIT_CUE_BINARY:cue}
+    timeout-millis: ${STELLORBIT_CUE_TIMEOUT_MILLIS:5000}
+  stellnula:
+    base-url: ${STELLORBIT_STELLNULA_BASE_URL:http://127.0.0.1:8060}
+  publish:
+    worker:
+      enabled: ${STELLORBIT_PUBLISH_WORKER_ENABLED:true}
+      worker-id: ${STELLORBIT_PUBLISH_WORKER_ID:}
+      fixed-delay-millis: ${STELLORBIT_PUBLISH_WORKER_FIXED_DELAY_MILLIS:1000}
+      batch-size: ${STELLORBIT_PUBLISH_WORKER_BATCH_SIZE:20}
+      running-job-timeout-millis: ${STELLORBIT_PUBLISH_RUNNING_JOB_TIMEOUT_MILLIS:60000}
+      stuck-release-timeout-millis: ${STELLORBIT_PUBLISH_STUCK_RELEASE_TIMEOUT_MILLIS:120000}
+  runtime:
+    node-id: ${STELLORBIT_RUNTIME_NODE_ID:stellorbit-local-1}
+    node-address: ${STELLORBIT_RUNTIME_NODE_ADDRESS:http://127.0.0.1:8080}
+    # Format: nodeId|httpAddress|weight. Clients use this list for fixed hash routing.
+    nodes: ${STELLORBIT_RUNTIME_NODES:}
+    rule-sync-fixed-delay-millis: ${STELLORBIT_RUNTIME_RULE_SYNC_FIXED_DELAY_MILLIS:1000}
+    counter-cleanup-fixed-delay-millis: ${STELLORBIT_RUNTIME_COUNTER_CLEANUP_FIXED_DELAY_MILLIS:1000}
+    counter-expire-after-window-millis: ${STELLORBIT_RUNTIME_COUNTER_EXPIRE_AFTER_WINDOW_MILLIS:5000}
+    quota-lease-cleanup-fixed-delay-millis: ${STELLORBIT_RUNTIME_QUOTA_LEASE_CLEANUP_FIXED_DELAY_MILLIS:5000}
+    decision-flush-fixed-delay-millis: ${STELLORBIT_RUNTIME_DECISION_FLUSH_FIXED_DELAY_MILLIS:1000}
+    decision-flush-batch-size: ${STELLORBIT_RUNTIME_DECISION_FLUSH_BATCH_SIZE:1000}
+    decision-buffer-capacity: ${STELLORBIT_RUNTIME_DECISION_BUFFER_CAPACITY:100000}
+    decision-sample-rate: ${STELLORBIT_RUNTIME_DECISION_SAMPLE_RATE:0.01}
