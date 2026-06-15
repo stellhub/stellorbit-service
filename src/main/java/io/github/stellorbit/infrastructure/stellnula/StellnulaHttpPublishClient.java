@@ -67,7 +67,15 @@ public class StellnulaHttpPublishClient implements StellnulaPublishClient {
       MutationResponse response =
           restClient
               .get()
-              .uri(queryPath(command), command.ruleId())
+              .uri(
+                  uriBuilder ->
+                      uriBuilder
+                          .path(queryPath(command))
+                          .queryParam("env", command.env())
+                          .queryParam("region", command.region())
+                          .queryParam("zone", command.zone())
+                          .queryParam("cluster", command.cluster())
+                          .build(command.ruleId()))
               .retrieve()
               .body(MutationResponse.class);
       if (response == null) {
@@ -125,7 +133,7 @@ public class StellnulaHttpPublishClient implements StellnulaPublishClient {
 
   private boolean usesGenericConfigEndpoint(StellnulaPublishCommand command) {
     return switch (command.publishKind()) {
-      case "AUTH_RULES", "MTLS_CERTIFICATE", "JWKS" -> true;
+      case "MTLS_CERTIFICATE", "JWKS" -> true;
       default -> false;
     };
   }
@@ -175,6 +183,7 @@ public class StellnulaHttpPublishClient implements StellnulaPublishClient {
       String ownerId,
       String namespace,
       String group,
+      String format,
       String contentType,
       boolean sensitive,
       String description,
@@ -193,6 +202,7 @@ public class StellnulaHttpPublishClient implements StellnulaPublishClient {
           command.ownerId(),
           command.namespaceCode(),
           command.configGroup(),
+          "json",
           command.contentType(),
           command.sensitive(),
           command.description(),

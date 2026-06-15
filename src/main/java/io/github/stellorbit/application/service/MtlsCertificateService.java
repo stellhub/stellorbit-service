@@ -2,8 +2,8 @@ package io.github.stellorbit.application.service;
 
 import io.github.stellorbit.infrastructure.persistence.entity.MtlsCertificateEntity;
 import io.github.stellorbit.infrastructure.persistence.repository.MtlsCertificateRepository;
-import io.github.stellorbit.interfaces.http.error.InvalidRuleRequestException;
-import io.github.stellorbit.interfaces.http.error.ResourceNotFoundException;
+import io.github.stellorbit.api.error.InvalidRuleRequestException;
+import io.github.stellorbit.api.error.ResourceNotFoundException;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;

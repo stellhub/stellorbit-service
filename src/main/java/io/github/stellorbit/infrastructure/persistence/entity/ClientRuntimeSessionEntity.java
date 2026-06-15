@@ -7,6 +7,7 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import java.time.OffsetDateTime;
@@ -89,4 +90,8 @@ public class ClientRuntimeSessionEntity implements Identifiable {
   @UpdateTimestamp
   @Column(name = "updated_at", nullable = false)
   private OffsetDateTime updatedAt;
+
+  @Version
+  @Column(name = "row_version", nullable = false)
+  private Long rowVersion = 0L;
 }

@@ -3,9 +3,9 @@ package io.github.stellorbit.application.service;
 import io.github.stellorbit.infrastructure.persistence.entity.AuthPolicyRuleEntity;
 import io.github.stellorbit.infrastructure.persistence.repository.AuthPolicyRuleRepository;
 import io.github.stellorbit.infrastructure.persistence.repository.GovernanceRuleRepository;
-import io.github.stellorbit.interfaces.http.dto.AuthRuleDetailRequest;
-import io.github.stellorbit.interfaces.http.dto.AuthRuleDetailResponse;
-import io.github.stellorbit.interfaces.http.dto.CreateAuthPolicyRuleRequest;
+import io.github.stellorbit.api.dto.AuthRuleDetailRequest;
+import io.github.stellorbit.api.dto.AuthRuleDetailResponse;
+import io.github.stellorbit.api.dto.CreateAuthPolicyRuleRequest;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 

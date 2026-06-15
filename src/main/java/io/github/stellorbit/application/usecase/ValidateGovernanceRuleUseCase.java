@@ -19,9 +19,9 @@ import io.github.stellorbit.infrastructure.persistence.repository.RateLimitQuota
 import io.github.stellorbit.infrastructure.persistence.repository.RateLimitRuleRepository;
 import io.github.stellorbit.infrastructure.persistence.repository.RouteRuleRepository;
 import io.github.stellorbit.infrastructure.persistence.repository.RuleValidationRepository;
-import io.github.stellorbit.interfaces.http.dto.RuleValidationResponse;
-import io.github.stellorbit.interfaces.http.error.ResourceNotFoundException;
-import io.github.stellorbit.interfaces.http.security.ControlPlaneSecurityContextHolder;
+import io.github.stellorbit.api.dto.RuleValidationResponse;
+import io.github.stellorbit.api.error.ResourceNotFoundException;
+import io.github.stellorbit.api.security.ControlPlaneSecurityContextHolder;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -89,6 +89,7 @@ public class ValidateGovernanceRuleUseCase {
     validateCommonRule(rule, errors, warnings);
     validateDetailRule(rule, errors, warnings);
     Map<String, Object> normalizedSnapshot = toNormalizedSnapshot(rule);
+    String schemaVersion = "stellorbit.governance.v1";
     if (errors.isEmpty()) {
       try {
         ApplicationEntity application =
@@ -99,6 +100,7 @@ public class ValidateGovernanceRuleUseCase {
         CompiledGovernanceRule compiledRule =
             governanceRuleContentCompiler.compile(rule, application);
         normalizedSnapshot = compiledRule.contentModel();
+        schemaVersion = compiledRule.schemaVersion();
         normalizedSnapshot.put("configId", compiledRule.configId());
         normalizedSnapshot.put("checksum", compiledRule.checksum());
         normalizedSnapshot.put("explain", compiledRule.explain());
@@ -111,6 +113,10 @@ public class ValidateGovernanceRuleUseCase {
     RuleValidationEntity validation = new RuleValidationEntity();
     validation.setRuleId(rule.getId());
     validation.setDraftVersion(rule.getDraftVersion());
+    validation.setSchemaVersion(schemaVersion);
+    validation.setProtocolVersion("stellorbit.runtime.protocol.v1");
+    validation.setCompatibilityStatus(errors.isEmpty() ? "COMPATIBLE" : "UNKNOWN");
+    validation.setCompatibilityMessages(new ArrayList<>(warnings));
     validation.setSourceFormat("CUE");
     validation.setValidationStatus(errors.isEmpty() ? "PASSED" : "FAILED");
     validation.setNormalizedSnapshotJson(normalizedSnapshot);

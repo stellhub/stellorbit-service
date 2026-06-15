@@ -1,9 +1,9 @@
 package io.github.stellorbit.application.service;
 
 import io.github.stellorbit.domain.Identifiable;
-import io.github.stellorbit.interfaces.http.error.ResourceNotFoundException;
-import io.github.stellorbit.interfaces.http.security.AccessDeniedException;
-import io.github.stellorbit.interfaces.http.security.ControlPlaneSecurityContextHolder;
+import io.github.stellorbit.api.error.ResourceNotFoundException;
+import io.github.stellorbit.api.security.AccessDeniedException;
+import io.github.stellorbit.api.security.ControlPlaneSecurityContextHolder;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.List;

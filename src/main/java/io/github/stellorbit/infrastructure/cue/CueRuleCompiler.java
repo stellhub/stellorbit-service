@@ -4,7 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.stellorbit.infrastructure.persistence.entity.GovernanceRuleEntity;
-import io.github.stellorbit.interfaces.http.error.InvalidRuleRequestException;
+import io.github.stellorbit.api.error.InvalidRuleRequestException;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;

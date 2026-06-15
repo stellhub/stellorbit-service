@@ -14,6 +14,35 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION fill_tenant_id_from_instance_space()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NEW.tenant_id IS NULL AND NEW.instance_space_id IS NOT NULL THEN
+        SELECT tenant_id INTO NEW.tenant_id
+        FROM instance_spaces
+        WHERE id = NEW.instance_space_id;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION fill_release_context()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NEW.release_id IS NOT NULL THEN
+        SELECT tenant_id, instance_space_id, application_id
+        INTO NEW.tenant_id, NEW.instance_space_id, NEW.application_id
+        FROM rule_releases
+        WHERE id = NEW.release_id;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
 CREATE TABLE instance_spaces (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id VARCHAR(120) NOT NULL,
@@ -32,6 +61,7 @@ CREATE TABLE instance_spaces (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     row_version BIGINT NOT NULL DEFAULT 0,
     CONSTRAINT uk_instance_spaces_code UNIQUE (tenant_id, space_code),
+    CONSTRAINT uk_instance_spaces_tenant_id UNIQUE (tenant_id, id),
     CONSTRAINT ck_instance_spaces_status CHECK (status IN ('ACTIVE', 'DISABLED', 'ARCHIVED')),
     CONSTRAINT ck_instance_spaces_labels_object CHECK (jsonb_typeof(labels) = 'object')
 );
@@ -40,6 +70,7 @@ COMMENT ON TABLE instance_spaces IS 'Instance spaces for environment, namespace 
 
 CREATE TABLE applications (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id VARCHAR(120) NOT NULL,
     instance_space_id UUID NOT NULL REFERENCES instance_spaces (id) ON DELETE RESTRICT,
     application_code VARCHAR(160) NOT NULL,
     application_name VARCHAR(160) NOT NULL,
@@ -52,7 +83,9 @@ CREATE TABLE applications (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     row_version BIGINT NOT NULL DEFAULT 0,
-    CONSTRAINT uk_applications_code UNIQUE (instance_space_id, application_code),
+    CONSTRAINT uk_applications_code UNIQUE (tenant_id, instance_space_id, application_code),
+    CONSTRAINT uk_applications_tenant_id UNIQUE (tenant_id, id),
+    CONSTRAINT fk_applications_tenant_space FOREIGN KEY (tenant_id, instance_space_id) REFERENCES instance_spaces (tenant_id, id) ON DELETE RESTRICT,
     CONSTRAINT ck_applications_status CHECK (status IN ('ACTIVE', 'DISABLED', 'ARCHIVED')),
     CONSTRAINT ck_applications_labels_object CHECK (jsonb_typeof(labels) = 'object')
 );
@@ -61,6 +94,7 @@ COMMENT ON TABLE applications IS 'Governance target applications under an instan
 
 CREATE TABLE governance_rules (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id VARCHAR(120) NOT NULL,
     instance_space_id UUID NOT NULL REFERENCES instance_spaces (id) ON DELETE RESTRICT,
     application_id UUID NOT NULL REFERENCES applications (id) ON DELETE RESTRICT,
     rule_code VARCHAR(160) NOT NULL,
@@ -85,7 +119,9 @@ CREATE TABLE governance_rules (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     published_at TIMESTAMPTZ,
     row_version BIGINT NOT NULL DEFAULT 0,
-    CONSTRAINT uk_governance_rules_code UNIQUE (instance_space_id, application_id, rule_type, rule_code),
+    CONSTRAINT uk_governance_rules_code UNIQUE (tenant_id, instance_space_id, application_id, rule_type, rule_code),
+    CONSTRAINT fk_governance_rules_tenant_space FOREIGN KEY (tenant_id, instance_space_id) REFERENCES instance_spaces (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT fk_governance_rules_tenant_application FOREIGN KEY (tenant_id, application_id) REFERENCES applications (tenant_id, id) ON DELETE RESTRICT,
     CONSTRAINT ck_governance_rules_type CHECK (rule_type IN ('ROUTE', 'BREAKER', 'RATE_LIMIT', 'AUTH')),
     CONSTRAINT ck_governance_rules_source_format CHECK (source_format = 'CUE'),
     CONSTRAINT ck_governance_rules_runtime_format CHECK (runtime_format IN ('JSON', 'PROTOBUF')),
@@ -328,6 +364,12 @@ CREATE TABLE rule_validations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     rule_id UUID NOT NULL REFERENCES governance_rules (id) ON DELETE CASCADE,
     draft_version BIGINT NOT NULL,
+    schema_version VARCHAR(64) NOT NULL DEFAULT 'stellorbit.governance.v1',
+    protocol_version VARCHAR(64) NOT NULL DEFAULT 'stellorbit.runtime.protocol.v1',
+    min_client_version VARCHAR(80),
+    max_client_version VARCHAR(80),
+    compatibility_status VARCHAR(32) NOT NULL DEFAULT 'COMPATIBLE',
+    compatibility_messages JSONB NOT NULL DEFAULT '[]'::JSONB,
     source_format VARCHAR(32) NOT NULL DEFAULT 'CUE',
     validation_status VARCHAR(32) NOT NULL,
     normalized_snapshot_json JSONB,
@@ -338,6 +380,8 @@ CREATE TABLE rule_validations (
     validated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT ck_rule_validations_source_format CHECK (source_format = 'CUE'),
     CONSTRAINT ck_rule_validations_status CHECK (validation_status IN ('PASSED', 'FAILED')),
+    CONSTRAINT ck_rule_validations_compatibility CHECK (compatibility_status IN ('COMPATIBLE', 'INCOMPATIBLE', 'UNKNOWN')),
+    CONSTRAINT ck_rule_validations_compatibility_messages_array CHECK (jsonb_typeof(compatibility_messages) = 'array'),
     CONSTRAINT ck_rule_validations_errors_array CHECK (jsonb_typeof(error_messages) = 'array'),
     CONSTRAINT ck_rule_validations_warnings_array CHECK (jsonb_typeof(warning_messages) = 'array')
 );
@@ -346,6 +390,7 @@ COMMENT ON TABLE rule_validations IS 'CUE validation records before rule publish
 
 CREATE TABLE rule_releases (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id VARCHAR(120) NOT NULL,
     instance_space_id UUID NOT NULL REFERENCES instance_spaces (id) ON DELETE RESTRICT,
     application_id UUID NOT NULL REFERENCES applications (id) ON DELETE RESTRICT,
     release_version BIGINT NOT NULL,
@@ -354,6 +399,13 @@ CREATE TABLE rule_releases (
     idempotency_key VARCHAR(160),
     source_format VARCHAR(32) NOT NULL DEFAULT 'CUE',
     runtime_format VARCHAR(32) NOT NULL DEFAULT 'JSON',
+    schema_version VARCHAR(64) NOT NULL DEFAULT 'stellorbit.governance.v1',
+    protocol_version VARCHAR(64) NOT NULL DEFAULT 'stellorbit.runtime.protocol.v1',
+    min_client_version VARCHAR(80),
+    max_client_version VARCHAR(80),
+    compatibility_status VARCHAR(32) NOT NULL DEFAULT 'COMPATIBLE',
+    compatibility_messages JSONB NOT NULL DEFAULT '[]'::JSONB,
+    approval_status VARCHAR(32) NOT NULL DEFAULT 'NOT_REQUIRED',
     release_snapshot_json JSONB,
     release_snapshot_bytes BYTEA,
     checksum VARCHAR(128) NOT NULL,
@@ -371,16 +423,23 @@ CREATE TABLE rule_releases (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     published_at TIMESTAMPTZ,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT uk_rule_releases_version UNIQUE (instance_space_id, application_id, release_version),
-    CONSTRAINT uk_rule_releases_idempotency UNIQUE (instance_space_id, application_id, idempotency_key),
-    CONSTRAINT ck_rule_releases_status CHECK (release_status IN ('CREATED', 'VALIDATING', 'PUBLISHING', 'PARTIAL_PUBLISHED', 'PUBLISHED', 'FAILED', 'ROLLED_BACK')),
+    row_version BIGINT NOT NULL DEFAULT 0,
+    CONSTRAINT uk_rule_releases_version UNIQUE (tenant_id, instance_space_id, application_id, release_version),
+    CONSTRAINT uk_rule_releases_idempotency UNIQUE (tenant_id, instance_space_id, application_id, idempotency_key),
+    CONSTRAINT fk_rule_releases_tenant_space FOREIGN KEY (tenant_id, instance_space_id) REFERENCES instance_spaces (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT fk_rule_releases_tenant_application FOREIGN KEY (tenant_id, application_id) REFERENCES applications (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT ck_rule_releases_status CHECK (release_status IN ('CREATED', 'VALIDATING', 'APPROVAL_PENDING', 'APPROVED', 'REJECTED', 'CANCELED', 'PUBLISHING', 'PARTIAL_PUBLISHED', 'PUBLISHED', 'FAILED', 'ROLLED_BACK')),
+    CONSTRAINT ck_rule_releases_approval_status CHECK (approval_status IN ('NOT_REQUIRED', 'PENDING', 'APPROVED', 'REJECTED', 'CANCELED')),
+    CONSTRAINT ck_rule_releases_compatibility CHECK (compatibility_status IN ('COMPATIBLE', 'INCOMPATIBLE', 'UNKNOWN')),
+    CONSTRAINT ck_rule_releases_compatibility_messages_array CHECK (jsonb_typeof(compatibility_messages) = 'array'),
     CONSTRAINT ck_rule_releases_source_format CHECK (source_format = 'CUE'),
     CONSTRAINT ck_rule_releases_runtime_format CHECK (runtime_format IN ('JSON', 'PROTOBUF')),
     CONSTRAINT ck_rule_releases_retry CHECK (retry_count >= 0 AND max_retry_count >= 0),
     CONSTRAINT ck_rule_releases_failure_details_array CHECK (jsonb_typeof(failure_details) = 'array'),
     CONSTRAINT ck_rule_releases_recovery_status CHECK (recovery_status IN ('NONE', 'MANUAL_RECOVERED')),
     CONSTRAINT ck_rule_releases_snapshot CHECK (
-        (runtime_format = 'JSON' AND release_snapshot_json IS NOT NULL AND release_snapshot_bytes IS NULL)
+        (release_status IN ('CREATED', 'VALIDATING', 'APPROVAL_PENDING', 'APPROVED', 'REJECTED', 'CANCELED', 'FAILED') AND release_snapshot_json IS NULL AND release_snapshot_bytes IS NULL)
+        OR (runtime_format = 'JSON' AND release_snapshot_json IS NOT NULL AND release_snapshot_bytes IS NULL)
         OR (runtime_format = 'PROTOBUF' AND release_snapshot_json IS NULL AND release_snapshot_bytes IS NOT NULL)
     )
 );
@@ -399,6 +458,12 @@ CREATE TABLE release_items (
     rule_code VARCHAR(160) NOT NULL,
     rule_name VARCHAR(160) NOT NULL,
     draft_version BIGINT NOT NULL,
+    schema_version VARCHAR(64) NOT NULL DEFAULT 'stellorbit.governance.v1',
+    protocol_version VARCHAR(64) NOT NULL DEFAULT 'stellorbit.runtime.protocol.v1',
+    min_client_version VARCHAR(80),
+    max_client_version VARCHAR(80),
+    compatibility_status VARCHAR(32) NOT NULL DEFAULT 'COMPATIBLE',
+    compatibility_messages JSONB NOT NULL DEFAULT '[]'::JSONB,
     priority INTEGER NOT NULL,
     cue_source TEXT NOT NULL,
     runtime_snapshot_json JSONB,
@@ -407,14 +472,92 @@ CREATE TABLE release_items (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT uk_release_items_rule UNIQUE (release_id, rule_id),
     CONSTRAINT ck_release_items_type CHECK (rule_type IN ('ROUTE', 'BREAKER', 'RATE_LIMIT', 'AUTH')),
+    CONSTRAINT ck_release_items_compatibility CHECK (compatibility_status IN ('COMPATIBLE', 'INCOMPATIBLE', 'UNKNOWN')),
+    CONSTRAINT ck_release_items_compatibility_messages_array CHECK (jsonb_typeof(compatibility_messages) = 'array'),
     CONSTRAINT ck_release_items_snapshot CHECK (runtime_snapshot_json IS NOT NULL OR runtime_snapshot_bytes IS NOT NULL)
 );
 
 COMMENT ON TABLE release_items IS 'Rule-level immutable snapshots included in a release.';
 
+CREATE TABLE approval_policies (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id VARCHAR(120) NOT NULL,
+    instance_space_id UUID NOT NULL REFERENCES instance_spaces (id) ON DELETE CASCADE,
+    application_id UUID REFERENCES applications (id) ON DELETE CASCADE,
+    policy_code VARCHAR(160) NOT NULL,
+    policy_name VARCHAR(160) NOT NULL,
+    resource_type VARCHAR(80) NOT NULL DEFAULT 'RULE_RELEASE',
+    required_approvals INTEGER NOT NULL DEFAULT 1,
+    allow_self_approval BOOLEAN NOT NULL DEFAULT FALSE,
+    approver_roles JSONB NOT NULL DEFAULT '["APPROVER"]'::JSONB,
+    approver_users JSONB NOT NULL DEFAULT '[]'::JSONB,
+    policy_status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
+    created_by VARCHAR(120) NOT NULL,
+    updated_by VARCHAR(120) NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    row_version BIGINT NOT NULL DEFAULT 0,
+    CONSTRAINT uk_approval_policies_code UNIQUE (tenant_id, instance_space_id, policy_code),
+    CONSTRAINT fk_approval_policies_tenant_space FOREIGN KEY (tenant_id, instance_space_id) REFERENCES instance_spaces (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT ck_approval_policies_required CHECK (required_approvals > 0),
+    CONSTRAINT ck_approval_policies_roles_array CHECK (jsonb_typeof(approver_roles) = 'array'),
+    CONSTRAINT ck_approval_policies_users_array CHECK (jsonb_typeof(approver_users) = 'array'),
+    CONSTRAINT ck_approval_policies_status CHECK (policy_status IN ('ACTIVE', 'DISABLED', 'ARCHIVED'))
+);
+
+COMMENT ON TABLE approval_policies IS 'Approval policies for enterprise rule release governance.';
+
+CREATE TABLE rule_release_approvals (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    release_id UUID NOT NULL REFERENCES rule_releases (id) ON DELETE CASCADE,
+    approval_policy_id UUID REFERENCES approval_policies (id) ON DELETE SET NULL,
+    tenant_id VARCHAR(120) NOT NULL,
+    instance_space_id UUID NOT NULL REFERENCES instance_spaces (id) ON DELETE CASCADE,
+    application_id UUID NOT NULL REFERENCES applications (id) ON DELETE CASCADE,
+    approval_status VARCHAR(32) NOT NULL DEFAULT 'PENDING',
+    required_approvals INTEGER NOT NULL DEFAULT 1,
+    approved_count INTEGER NOT NULL DEFAULT 0,
+    rejected_count INTEGER NOT NULL DEFAULT 0,
+    submitted_by VARCHAR(120) NOT NULL,
+    submitted_reason TEXT NOT NULL,
+    submitted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    completed_at TIMESTAMPTZ,
+    row_version BIGINT NOT NULL DEFAULT 0,
+    CONSTRAINT uk_rule_release_approvals_release UNIQUE (release_id),
+    CONSTRAINT fk_rule_release_approvals_tenant_space FOREIGN KEY (tenant_id, instance_space_id) REFERENCES instance_spaces (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_rule_release_approvals_tenant_application FOREIGN KEY (tenant_id, application_id) REFERENCES applications (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT ck_rule_release_approvals_status CHECK (approval_status IN ('PENDING', 'APPROVED', 'REJECTED', 'CANCELED')),
+    CONSTRAINT ck_rule_release_approvals_counts CHECK (required_approvals > 0 AND approved_count >= 0 AND rejected_count >= 0)
+);
+
+COMMENT ON TABLE rule_release_approvals IS 'Approval instances for rule releases.';
+
+CREATE TABLE approval_tasks (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    approval_id UUID NOT NULL REFERENCES rule_release_approvals (id) ON DELETE CASCADE,
+    release_id UUID NOT NULL REFERENCES rule_releases (id) ON DELETE CASCADE,
+    tenant_id VARCHAR(120) NOT NULL,
+    instance_space_id UUID NOT NULL REFERENCES instance_spaces (id) ON DELETE CASCADE,
+    application_id UUID NOT NULL REFERENCES applications (id) ON DELETE CASCADE,
+    task_status VARCHAR(32) NOT NULL DEFAULT 'PENDING',
+    approver VARCHAR(120) NOT NULL,
+    approver_role VARCHAR(120),
+    reason TEXT,
+    action_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    row_version BIGINT NOT NULL DEFAULT 0,
+    CONSTRAINT uk_approval_tasks_approver UNIQUE (approval_id, approver),
+    CONSTRAINT fk_approval_tasks_tenant_space FOREIGN KEY (tenant_id, instance_space_id) REFERENCES instance_spaces (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT fk_approval_tasks_tenant_application FOREIGN KEY (tenant_id, application_id) REFERENCES applications (tenant_id, id) ON DELETE CASCADE,
+    CONSTRAINT ck_approval_tasks_status CHECK (task_status IN ('PENDING', 'APPROVED', 'REJECTED', 'CANCELED'))
+);
+
+COMMENT ON TABLE approval_tasks IS 'Per-approver approval tasks and decisions for rule releases.';
+
 CREATE TABLE stellnula_publish_records (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     release_id UUID NOT NULL REFERENCES rule_releases (id) ON DELETE CASCADE,
+    tenant_id VARCHAR(120) NOT NULL,
     instance_space_id UUID NOT NULL REFERENCES instance_spaces (id) ON DELETE RESTRICT,
     application_id UUID NOT NULL REFERENCES applications (id) ON DELETE RESTRICT,
     publish_kind VARCHAR(48) NOT NULL,
@@ -443,7 +586,10 @@ CREATE TABLE stellnula_publish_records (
     published_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    row_version BIGINT NOT NULL DEFAULT 0,
     CONSTRAINT uk_stellnula_publish_records_key UNIQUE (release_id, namespace_code, config_group, data_id),
+    CONSTRAINT fk_stellnula_publish_records_tenant_space FOREIGN KEY (tenant_id, instance_space_id) REFERENCES instance_spaces (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT fk_stellnula_publish_records_tenant_application FOREIGN KEY (tenant_id, application_id) REFERENCES applications (tenant_id, id) ON DELETE RESTRICT,
     CONSTRAINT ck_stellnula_publish_records_kind CHECK (publish_kind IN ('RULE_SNAPSHOT', 'ROUTE_RULES', 'BREAKER_RULES', 'RATE_LIMIT_RULES', 'AUTH_RULES', 'MTLS_CERTIFICATE', 'JWKS', 'RATE_LIMIT_ASSIGNMENT')),
     CONSTRAINT ck_stellnula_publish_records_runtime_format CHECK (runtime_format IN ('JSON', 'PROTOBUF')),
     CONSTRAINT ck_stellnula_publish_records_status CHECK (publish_status IN ('PENDING', 'PUBLISHING', 'PUBLISHED', 'FAILED')),
@@ -478,6 +624,7 @@ CREATE TABLE client_runtime_sessions (
     first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    row_version BIGINT NOT NULL DEFAULT 0,
     CONSTRAINT uk_client_runtime_sessions_client UNIQUE (instance_space_id, application_id, client_id),
     CONSTRAINT ck_client_runtime_sessions_format CHECK (runtime_format IN ('JSON', 'PROTOBUF')),
     CONSTRAINT ck_client_runtime_sessions_status CHECK (session_status IN ('ONLINE', 'STALE', 'OFFLINE')),
@@ -489,6 +636,7 @@ COMMENT ON TABLE client_runtime_sessions IS 'Runtime client sessions used for ve
 
 CREATE TABLE client_runtime_acks (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id VARCHAR(120) NOT NULL,
     instance_space_id UUID NOT NULL REFERENCES instance_spaces (id) ON DELETE CASCADE,
     application_id UUID NOT NULL REFERENCES applications (id) ON DELETE CASCADE,
     release_id UUID NOT NULL REFERENCES rule_releases (id) ON DELETE CASCADE,
@@ -511,7 +659,8 @@ CREATE TABLE client_runtime_acks (
 COMMENT ON TABLE client_runtime_acks IS 'Client ACK records for delivered runtime rule snapshots.';
 
 CREATE TABLE client_runtime_status_reports (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID NOT NULL DEFAULT gen_random_uuid(),
+    tenant_id VARCHAR(120) NOT NULL,
     instance_space_id UUID NOT NULL REFERENCES instance_spaces (id) ON DELETE CASCADE,
     application_id UUID NOT NULL REFERENCES applications (id) ON DELETE CASCADE,
     release_id UUID REFERENCES rule_releases (id) ON DELETE SET NULL,
@@ -526,16 +675,20 @@ CREATE TABLE client_runtime_status_reports (
     error_details JSONB NOT NULL DEFAULT '[]'::JSONB,
     reported_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT pk_client_runtime_status_reports PRIMARY KEY (id, created_at),
     CONSTRAINT ck_client_runtime_status_reports_format CHECK (runtime_format IN ('JSON', 'PROTOBUF')),
     CONSTRAINT ck_client_runtime_status_reports_status CHECK (effective_status IN ('APPLIED', 'PARTIAL_APPLIED', 'FAILED', 'ROLLING_BACK', 'ROLLED_BACK')),
     CONSTRAINT ck_client_runtime_status_reports_rules_array CHECK (jsonb_typeof(rule_statuses) = 'array'),
     CONSTRAINT ck_client_runtime_status_reports_errors_array CHECK (jsonb_typeof(error_details) = 'array')
-);
+) PARTITION BY RANGE (created_at);
 
 COMMENT ON TABLE client_runtime_status_reports IS 'Client effective-state reports for runtime rule snapshots.';
 
+CREATE TABLE client_runtime_status_reports_default PARTITION OF client_runtime_status_reports DEFAULT;
+
 CREATE TABLE publish_locks (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id VARCHAR(120) NOT NULL,
     instance_space_id UUID NOT NULL REFERENCES instance_spaces (id) ON DELETE CASCADE,
     application_id UUID NOT NULL REFERENCES applications (id) ON DELETE CASCADE,
     release_id UUID NOT NULL REFERENCES rule_releases (id) ON DELETE CASCADE,
@@ -549,6 +702,7 @@ CREATE TABLE publish_locks (
     release_reason TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    row_version BIGINT NOT NULL DEFAULT 0,
     CONSTRAINT ck_publish_locks_status CHECK (lock_status IN ('ACTIVE', 'RELEASED', 'EXPIRED')),
     CONSTRAINT ck_publish_locks_expiry CHECK (expires_at > locked_at)
 );
@@ -561,6 +715,7 @@ CREATE TABLE publish_jobs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     release_id UUID NOT NULL REFERENCES rule_releases (id) ON DELETE CASCADE,
     publish_record_id UUID REFERENCES stellnula_publish_records (id) ON DELETE CASCADE,
+    tenant_id VARCHAR(120) NOT NULL,
     instance_space_id UUID NOT NULL REFERENCES instance_spaces (id) ON DELETE CASCADE,
     application_id UUID NOT NULL REFERENCES applications (id) ON DELETE CASCADE,
     job_type VARCHAR(48) NOT NULL,
@@ -578,6 +733,7 @@ CREATE TABLE publish_jobs (
     payload_metadata JSONB NOT NULL DEFAULT '{}'::JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    row_version BIGINT NOT NULL DEFAULT 0,
     CONSTRAINT uk_publish_jobs_idempotency UNIQUE (idempotency_key),
     CONSTRAINT ck_publish_jobs_type CHECK (job_type IN ('PUBLISH_RECORD', 'RECONCILE_RECORD', 'COMPENSATE_RELEASE')),
     CONSTRAINT ck_publish_jobs_status CHECK (job_status IN ('PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED', 'CANCELED')),
@@ -590,6 +746,9 @@ COMMENT ON TABLE publish_jobs IS 'Outbox jobs used by publish workers to asynchr
 
 CREATE TABLE rate_limit_quota_assignments (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id VARCHAR(120) NOT NULL,
+    instance_space_id UUID NOT NULL REFERENCES instance_spaces (id) ON DELETE CASCADE,
+    application_id UUID NOT NULL REFERENCES applications (id) ON DELETE CASCADE,
     rate_limit_rule_id UUID NOT NULL REFERENCES rate_limit_rules (governance_rule_id) ON DELETE CASCADE,
     quota_policy_id UUID NOT NULL REFERENCES rate_limit_quota_policies (id) ON DELETE CASCADE,
     release_id UUID NOT NULL REFERENCES rule_releases (id) ON DELETE RESTRICT,
@@ -603,6 +762,7 @@ CREATE TABLE rate_limit_quota_assignments (
     assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     expires_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    row_version BIGINT NOT NULL DEFAULT 0,
     CONSTRAINT uk_rate_limit_quota_assignments UNIQUE (rate_limit_rule_id, client_id, limit_key_hash, lease_version),
     CONSTRAINT ck_rate_limit_quota_assignments_quota CHECK (assigned_quota >= 0),
     CONSTRAINT ck_rate_limit_quota_assignments_used CHECK (used_quota >= 0),
@@ -614,8 +774,11 @@ CREATE TABLE rate_limit_quota_assignments (
 COMMENT ON TABLE rate_limit_quota_assignments IS 'Quota lease assignments issued to distributed rate limit clients.';
 
 CREATE TABLE rate_limit_usage_reports (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID NOT NULL DEFAULT gen_random_uuid(),
     assignment_id UUID REFERENCES rate_limit_quota_assignments (id) ON DELETE SET NULL,
+    tenant_id VARCHAR(120) NOT NULL,
+    instance_space_id UUID NOT NULL REFERENCES instance_spaces (id) ON DELETE CASCADE,
+    application_id UUID NOT NULL REFERENCES applications (id) ON DELETE CASCADE,
     rate_limit_rule_id UUID NOT NULL REFERENCES rate_limit_rules (governance_rule_id) ON DELETE CASCADE,
     release_id UUID NOT NULL REFERENCES rule_releases (id) ON DELETE RESTRICT,
     client_id VARCHAR(160) NOT NULL,
@@ -627,17 +790,21 @@ CREATE TABLE rate_limit_usage_reports (
     report_window_start TIMESTAMPTZ NOT NULL,
     report_window_end TIMESTAMPTZ NOT NULL,
     reported_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT pk_rate_limit_usage_reports PRIMARY KEY (id, reported_at),
     CONSTRAINT ck_rate_limit_usage_reports_used CHECK (reported_used >= 0),
     CONSTRAINT ck_rate_limit_usage_reports_allowed CHECK (reported_allowed >= 0),
     CONSTRAINT ck_rate_limit_usage_reports_rejected CHECK (reported_rejected >= 0),
     CONSTRAINT ck_rate_limit_usage_reports_model_object CHECK (jsonb_typeof(model_usage) = 'object'),
     CONSTRAINT ck_rate_limit_usage_reports_window CHECK (report_window_end > report_window_start)
-);
+) PARTITION BY RANGE (reported_at);
 
 COMMENT ON TABLE rate_limit_usage_reports IS 'Periodic usage reports from clients for quota rebalance and model usage accounting.';
 
+CREATE TABLE rate_limit_usage_reports_default PARTITION OF rate_limit_usage_reports DEFAULT;
+
 CREATE TABLE rate_limit_buckets (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    id UUID NOT NULL DEFAULT gen_random_uuid(),
+    tenant_id VARCHAR(120) NOT NULL,
     instance_space_id UUID NOT NULL REFERENCES instance_spaces (id) ON DELETE RESTRICT,
     application_id UUID NOT NULL REFERENCES applications (id) ON DELETE RESTRICT,
     rate_limit_rule_id UUID NOT NULL REFERENCES rate_limit_rules (governance_rule_id) ON DELETE CASCADE,
@@ -654,6 +821,7 @@ CREATE TABLE rate_limit_buckets (
     expires_at TIMESTAMPTZ NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT pk_rate_limit_buckets PRIMARY KEY (id, window_start_at),
     CONSTRAINT uk_rate_limit_buckets_window UNIQUE (rate_limit_rule_id, release_id, limit_key_hash, window_start_at),
     CONSTRAINT ck_rate_limit_buckets_strategy CHECK (window_strategy IN ('TOKEN_BUCKET', 'LEAKY_BUCKET', 'FIXED_WINDOW', 'SLIDING_WINDOW', 'QUOTA_LEASE')),
     CONSTRAINT ck_rate_limit_buckets_quota CHECK (quota >= 0),
@@ -661,14 +829,17 @@ CREATE TABLE rate_limit_buckets (
     CONSTRAINT ck_rate_limit_buckets_remaining CHECK (remaining_permits >= 0),
     CONSTRAINT ck_rate_limit_buckets_window_time CHECK (window_end_at > window_start_at),
     CONSTRAINT ck_rate_limit_buckets_remaining_capacity CHECK (remaining_permits <= quota)
-);
+) PARTITION BY RANGE (window_start_at);
 
 COMMENT ON TABLE rate_limit_buckets IS 'Server-side distributed rate limit bucket states for synchronous decisions.';
 
+CREATE TABLE rate_limit_buckets_default PARTITION OF rate_limit_buckets DEFAULT;
+
 CREATE TABLE rate_limit_decisions (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    bucket_id UUID REFERENCES rate_limit_buckets (id) ON DELETE SET NULL,
+    id UUID NOT NULL DEFAULT gen_random_uuid(),
+    bucket_id UUID,
     assignment_id UUID REFERENCES rate_limit_quota_assignments (id) ON DELETE SET NULL,
+    tenant_id VARCHAR(120) NOT NULL,
     instance_space_id UUID NOT NULL REFERENCES instance_spaces (id) ON DELETE RESTRICT,
     application_id UUID NOT NULL REFERENCES applications (id) ON DELETE RESTRICT,
     rate_limit_rule_id UUID NOT NULL REFERENCES rate_limit_rules (governance_rule_id) ON DELETE CASCADE,
@@ -684,13 +855,34 @@ CREATE TABLE rate_limit_decisions (
     fallback_used BOOLEAN NOT NULL DEFAULT FALSE,
     decision_reason VARCHAR(160),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    retention_until TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '7 days'),
+    CONSTRAINT pk_rate_limit_decisions PRIMARY KEY (id, created_at),
     CONSTRAINT ck_rate_limit_decisions_permits CHECK (requested_permits > 0),
     CONSTRAINT ck_rate_limit_decisions_remaining CHECK (remaining_permits IS NULL OR remaining_permits >= 0),
     CONSTRAINT ck_rate_limit_decisions_retry_after CHECK (retry_after_millis IS NULL OR retry_after_millis >= 0),
     CONSTRAINT ck_rate_limit_decisions_model_object CHECK (jsonb_typeof(model_request_units) = 'object')
-);
+) PARTITION BY RANGE (created_at);
 
 COMMENT ON TABLE rate_limit_decisions IS 'Append-only distributed rate limit decision logs.';
+
+CREATE TABLE rate_limit_decisions_default PARTITION OF rate_limit_decisions DEFAULT;
+
+CREATE TABLE runtime_table_retention_policies (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    table_name VARCHAR(120) NOT NULL,
+    partition_key VARCHAR(120) NOT NULL,
+    retention_days INTEGER NOT NULL,
+    cleanup_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    archive_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    policy_status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uk_runtime_table_retention_policies_table UNIQUE (table_name),
+    CONSTRAINT ck_runtime_table_retention_policies_days CHECK (retention_days > 0),
+    CONSTRAINT ck_runtime_table_retention_policies_status CHECK (policy_status IN ('ACTIVE', 'DISABLED'))
+);
+
+COMMENT ON TABLE runtime_table_retention_policies IS 'Retention and cleanup policies for high-cardinality runtime tables.';
 
 CREATE TABLE audit_events (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -720,10 +912,20 @@ BEFORE UPDATE ON applications
 FOR EACH ROW
 EXECUTE FUNCTION touch_updated_at();
 
+CREATE TRIGGER trg_applications_fill_tenant_id
+BEFORE INSERT OR UPDATE ON applications
+FOR EACH ROW
+EXECUTE FUNCTION fill_tenant_id_from_instance_space();
+
 CREATE TRIGGER trg_governance_rules_touch_updated_at
 BEFORE UPDATE ON governance_rules
 FOR EACH ROW
 EXECUTE FUNCTION touch_updated_at();
+
+CREATE TRIGGER trg_governance_rules_fill_tenant_id
+BEFORE INSERT OR UPDATE ON governance_rules
+FOR EACH ROW
+EXECUTE FUNCTION fill_tenant_id_from_instance_space();
 
 CREATE TRIGGER trg_cue_schema_versions_touch_updated_at
 BEFORE UPDATE ON cue_schema_versions
@@ -765,43 +967,123 @@ BEFORE UPDATE ON rule_releases
 FOR EACH ROW
 EXECUTE FUNCTION touch_updated_at();
 
+CREATE TRIGGER trg_rule_releases_fill_tenant_id
+BEFORE INSERT OR UPDATE ON rule_releases
+FOR EACH ROW
+EXECUTE FUNCTION fill_tenant_id_from_instance_space();
+
+CREATE TRIGGER trg_approval_policies_touch_updated_at
+BEFORE UPDATE ON approval_policies
+FOR EACH ROW
+EXECUTE FUNCTION touch_updated_at();
+
+CREATE TRIGGER trg_approval_policies_fill_tenant_id
+BEFORE INSERT OR UPDATE ON approval_policies
+FOR EACH ROW
+EXECUTE FUNCTION fill_tenant_id_from_instance_space();
+
+CREATE TRIGGER trg_rule_release_approvals_fill_tenant_id
+BEFORE INSERT OR UPDATE ON rule_release_approvals
+FOR EACH ROW
+EXECUTE FUNCTION fill_tenant_id_from_instance_space();
+
+CREATE TRIGGER trg_approval_tasks_fill_tenant_id
+BEFORE INSERT OR UPDATE ON approval_tasks
+FOR EACH ROW
+EXECUTE FUNCTION fill_tenant_id_from_instance_space();
+
 CREATE TRIGGER trg_stellnula_publish_records_touch_updated_at
 BEFORE UPDATE ON stellnula_publish_records
 FOR EACH ROW
 EXECUTE FUNCTION touch_updated_at();
+
+CREATE TRIGGER trg_stellnula_publish_records_fill_tenant_id
+BEFORE INSERT OR UPDATE ON stellnula_publish_records
+FOR EACH ROW
+EXECUTE FUNCTION fill_tenant_id_from_instance_space();
 
 CREATE TRIGGER trg_client_runtime_sessions_touch_updated_at
 BEFORE UPDATE ON client_runtime_sessions
 FOR EACH ROW
 EXECUTE FUNCTION touch_updated_at();
 
+CREATE TRIGGER trg_client_runtime_sessions_fill_tenant_id
+BEFORE INSERT OR UPDATE ON client_runtime_sessions
+FOR EACH ROW
+EXECUTE FUNCTION fill_tenant_id_from_instance_space();
+
+CREATE TRIGGER trg_client_runtime_acks_fill_tenant_id
+BEFORE INSERT OR UPDATE ON client_runtime_acks
+FOR EACH ROW
+EXECUTE FUNCTION fill_tenant_id_from_instance_space();
+
+CREATE TRIGGER trg_client_runtime_status_reports_fill_tenant_id
+BEFORE INSERT OR UPDATE ON client_runtime_status_reports
+FOR EACH ROW
+EXECUTE FUNCTION fill_tenant_id_from_instance_space();
+
 CREATE TRIGGER trg_publish_locks_touch_updated_at
 BEFORE UPDATE ON publish_locks
 FOR EACH ROW
 EXECUTE FUNCTION touch_updated_at();
+
+CREATE TRIGGER trg_publish_locks_fill_tenant_id
+BEFORE INSERT OR UPDATE ON publish_locks
+FOR EACH ROW
+EXECUTE FUNCTION fill_tenant_id_from_instance_space();
 
 CREATE TRIGGER trg_publish_jobs_touch_updated_at
 BEFORE UPDATE ON publish_jobs
 FOR EACH ROW
 EXECUTE FUNCTION touch_updated_at();
 
+CREATE TRIGGER trg_publish_jobs_fill_tenant_id
+BEFORE INSERT OR UPDATE ON publish_jobs
+FOR EACH ROW
+EXECUTE FUNCTION fill_tenant_id_from_instance_space();
+
 CREATE TRIGGER trg_rate_limit_quota_assignments_touch_updated_at
 BEFORE UPDATE ON rate_limit_quota_assignments
 FOR EACH ROW
 EXECUTE FUNCTION touch_updated_at();
+
+CREATE TRIGGER trg_rate_limit_quota_assignments_fill_release_context
+BEFORE INSERT OR UPDATE ON rate_limit_quota_assignments
+FOR EACH ROW
+EXECUTE FUNCTION fill_release_context();
 
 CREATE TRIGGER trg_rate_limit_buckets_touch_updated_at
 BEFORE UPDATE ON rate_limit_buckets
 FOR EACH ROW
 EXECUTE FUNCTION touch_updated_at();
 
+CREATE TRIGGER trg_rate_limit_buckets_fill_release_context
+BEFORE INSERT OR UPDATE ON rate_limit_buckets
+FOR EACH ROW
+EXECUTE FUNCTION fill_release_context();
+
+CREATE TRIGGER trg_rate_limit_usage_reports_fill_release_context
+BEFORE INSERT OR UPDATE ON rate_limit_usage_reports
+FOR EACH ROW
+EXECUTE FUNCTION fill_release_context();
+
+CREATE TRIGGER trg_rate_limit_decisions_fill_release_context
+BEFORE INSERT OR UPDATE ON rate_limit_decisions
+FOR EACH ROW
+EXECUTE FUNCTION fill_release_context();
+
+CREATE TRIGGER trg_runtime_table_retention_policies_touch_updated_at
+BEFORE UPDATE ON runtime_table_retention_policies
+FOR EACH ROW
+EXECUTE FUNCTION touch_updated_at();
+
 CREATE INDEX idx_instance_spaces_status ON instance_spaces (status);
 CREATE INDEX idx_instance_spaces_tenant_status ON instance_spaces (tenant_id, status);
 CREATE INDEX idx_instance_spaces_labels_gin ON instance_spaces USING GIN (labels);
-CREATE INDEX idx_applications_space_status ON applications (instance_space_id, status);
+CREATE INDEX idx_applications_tenant_space_status ON applications (tenant_id, instance_space_id, status);
 CREATE INDEX idx_applications_labels_gin ON applications USING GIN (labels);
 
-CREATE INDEX idx_governance_rules_space_app_type_status ON governance_rules (instance_space_id, application_id, rule_type, status);
+CREATE INDEX idx_governance_rules_space_app_type_status ON governance_rules (tenant_id, instance_space_id, application_id, rule_type, status);
 CREATE INDEX idx_governance_rules_latest_release ON governance_rules (latest_release_id);
 CREATE INDEX idx_governance_rules_tags_gin ON governance_rules USING GIN (tags);
 CREATE INDEX idx_governance_rules_runtime_snapshot_json_gin ON governance_rules USING GIN (runtime_snapshot_json);
@@ -830,9 +1112,12 @@ CREATE INDEX idx_mtls_certificates_space_status ON mtls_certificates (instance_s
 CREATE INDEX idx_mtls_certificates_validity ON mtls_certificates (not_before, not_after);
 
 CREATE INDEX idx_rule_validations_rule_version ON rule_validations (rule_id, draft_version);
-CREATE INDEX idx_rule_releases_space_app_status ON rule_releases (instance_space_id, application_id, release_status);
+CREATE INDEX idx_rule_releases_space_app_status ON rule_releases (tenant_id, instance_space_id, application_id, release_status);
 CREATE INDEX idx_rule_releases_snapshot_json_gin ON rule_releases USING GIN (release_snapshot_json);
 CREATE INDEX idx_release_items_release_type ON release_items (release_id, rule_type);
+CREATE INDEX idx_approval_policies_space_status ON approval_policies (tenant_id, instance_space_id, policy_status);
+CREATE INDEX idx_rule_release_approvals_release_status ON rule_release_approvals (release_id, approval_status);
+CREATE INDEX idx_approval_tasks_approver_status ON approval_tasks (approver, task_status);
 CREATE INDEX idx_stellnula_publish_records_release_status ON stellnula_publish_records (release_id, publish_status);
 CREATE INDEX idx_stellnula_publish_records_kind ON stellnula_publish_records (publish_kind);
 CREATE INDEX idx_client_runtime_sessions_space_app_status ON client_runtime_sessions (instance_space_id, application_id, session_status);
@@ -863,3 +1148,12 @@ CREATE INDEX idx_rate_limit_decisions_model_gin ON rate_limit_decisions USING GI
 CREATE INDEX idx_audit_events_resource ON audit_events (resource_type, resource_id);
 CREATE INDEX idx_audit_events_tenant_created_at ON audit_events (tenant_id, created_at);
 CREATE INDEX idx_audit_events_created_at ON audit_events (created_at);
+
+INSERT INTO runtime_table_retention_policies
+    (table_name, partition_key, retention_days, cleanup_enabled, archive_enabled)
+VALUES
+    ('rate_limit_decisions', 'created_at', 7, TRUE, FALSE),
+    ('rate_limit_buckets', 'window_start_at', 3, TRUE, FALSE),
+    ('rate_limit_usage_reports', 'reported_at', 30, TRUE, TRUE),
+    ('client_runtime_status_reports', 'created_at', 30, TRUE, TRUE)
+ON CONFLICT (table_name) DO NOTHING;

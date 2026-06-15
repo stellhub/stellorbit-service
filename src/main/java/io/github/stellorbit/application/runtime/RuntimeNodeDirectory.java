@@ -1,7 +1,7 @@
 package io.github.stellorbit.application.runtime;
 
-import io.github.stellorbit.interfaces.http.dto.RuntimeNodeDirectoryResponse;
-import io.github.stellorbit.interfaces.http.dto.RuntimeNodeResponse;
+import io.github.stellorbit.api.dto.RuntimeNodeDirectoryResponse;
+import io.github.stellorbit.api.dto.RuntimeNodeResponse;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;

@@ -4,13 +4,6 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
-    <parent>
-        <groupId>org.springframework.boot</groupId>
-        <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.5.14</version>
-        <relativePath />
-    </parent>
-
     <groupId>io.github.stellhub</groupId>
     <artifactId>stellorbit-service</artifactId>
     <version>0.0.1</version>
@@ -25,10 +18,11 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
         <project.build.outputTimestamp>2026-05-29T00:00:00Z</project.build.outputTimestamp>
-        <stellflux.version>1.0.1</stellflux.version>
+        <stellflux.version>1.0.2</stellflux.version>
         <grpc.version>1.73.0</grpc.version>
         <protobuf.version>3.25.5</protobuf.version>
         <lombok.version>1.18.46</lombok.version>
+        <springboot.version>3.5.14</springboot.version>
     </properties>
 
     <licenses>
@@ -62,6 +56,13 @@
                 <groupId>io.github.stellhub</groupId>
                 <artifactId>stellflux-bom</artifactId>
                 <version>${stellflux.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>${springboot.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -106,10 +107,6 @@
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
         <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-web</artifactId>
-        </dependency>
-        <dependency>
             <groupId>io.grpc</groupId>
             <artifactId>grpc-protobuf</artifactId>
             <version>${grpc.version}</version>
@@ -117,6 +114,7 @@
         <dependency>
             <groupId>com.google.protobuf</groupId>
             <artifactId>protobuf-java</artifactId>
+            <version>${protobuf.version}</version>
         </dependency>
         <dependency>
             <groupId>com.google.protobuf</groupId>

@@ -3,9 +3,9 @@ package io.github.stellorbit.application.service;
 import io.github.stellorbit.infrastructure.persistence.entity.BreakerRuleEntity;
 import io.github.stellorbit.infrastructure.persistence.repository.BreakerRuleRepository;
 import io.github.stellorbit.infrastructure.persistence.repository.GovernanceRuleRepository;
-import io.github.stellorbit.interfaces.http.dto.BreakerRuleDetailRequest;
-import io.github.stellorbit.interfaces.http.dto.BreakerRuleDetailResponse;
-import io.github.stellorbit.interfaces.http.dto.CreateBreakerRuleRequest;
+import io.github.stellorbit.api.dto.BreakerRuleDetailRequest;
+import io.github.stellorbit.api.dto.BreakerRuleDetailResponse;
+import io.github.stellorbit.api.dto.CreateBreakerRuleRequest;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 

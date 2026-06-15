@@ -2,7 +2,7 @@ package io.github.stellorbit.infrastructure.cue;
 
 import io.github.stellorbit.infrastructure.persistence.entity.CueSchemaVersionEntity;
 import io.github.stellorbit.infrastructure.persistence.repository.CueSchemaVersionRepository;
-import io.github.stellorbit.interfaces.http.error.InvalidRuleRequestException;
+import io.github.stellorbit.api.error.InvalidRuleRequestException;
 import java.util.Map;
 import org.springframework.stereotype.Component;
 
@@ -88,7 +88,7 @@ public class CueSchemaRegistry {
 
   private String routeBlock() {
     return """
-    route: {
+    routes: {
       routeType: #NonEmptyString
       trafficDirection: *"EAST_WEST" | "EAST_WEST" | "NORTH_SOUTH" | "EGRESS"
       protocol: #NonEmptyString

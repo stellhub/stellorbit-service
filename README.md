@@ -272,7 +272,12 @@ JSON/Protobuf 兼容策略：
 - 分布式限流运行时表：`rate_limit_quota_assignments`、`rate_limit_usage_reports`、`rate_limit_buckets`、`rate_limit_decisions`。
 - 发布表：`rule_validations`、`rule_releases`、`release_items`、`stellnula_publish_records`。
 - 发布作业表：`publish_locks`、`publish_jobs`。
+- 审批表：`approval_policies`、`rule_release_approvals`、`approval_tasks`。
+- 客户端运行时协议表：`client_runtime_sessions`、`client_runtime_acks`、`client_runtime_status_reports`。
+- 高基数运行时表保留策略：`runtime_table_retention_policies`。
 - 审计表：`audit_events`。
+
+核心业务表通过 `tenant_id + instance_space_id` 建立数据库级租户隔离约束，`tenant_id` 由数据库触发器从 `instance_spaces` 回填，避免应用层漏传租户导致跨租户写入。`rule_releases`、`release_items`、`rule_validations` 固化 CUE schema version、运行时协议版本和兼容性结果，保证发布快照可追溯。`rate_limit_decisions`、`rate_limit_buckets`、`rate_limit_usage_reports`、`client_runtime_status_reports` 使用 PostgreSQL 时间范围分区并提供默认分区，配合保留策略表执行后续清理和归档。
 
 ### 控制面 API 草案
 
@@ -291,7 +296,7 @@ JSON/Protobuf 兼容策略：
 
 RBAC 首版约定：查询接口允许只读角色访问；规则、证书和基础资源写操作需要 `OPERATOR`；发布、重试、回滚和人工恢复需要 `PUBLISHER`；审批通过和驳回需要 `APPROVER`；证书等安全资源需要 `SECURITY_ADMIN` 或 `OPERATOR`；`ADMIN` 拥有所有控制面权限。发布审批会校验审批人不能和发布创建人或发布人相同。
 
-控制面写操作会统一写入 `audit_events`，记录租户、实例空间、操作人、操作原因、请求路径、HTTP 状态、请求 ID、角色、来源 IP 和 User-Agent。运行时限流 API 不走这套控制面拦截和审计链路，避免高 QPS 请求被控制面权限模型影响。
+发布审批由 `rule_release_approvals` 和 `approval_tasks` 作为状态事实源，`audit_events` 只负责不可变操作留痕。控制面写操作会统一写入 `audit_events`，记录租户、实例空间、操作人、操作原因、请求路径、HTTP 状态、请求 ID、角色、来源 IP 和 User-Agent。运行时限流 API 不走这套控制面拦截和审计链路，避免高 QPS 请求被控制面权限模型影响。
 
 ```text
 POST   /api/stellorbit/instance-spaces

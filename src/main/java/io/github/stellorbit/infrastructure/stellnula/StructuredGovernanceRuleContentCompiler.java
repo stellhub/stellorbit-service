@@ -19,7 +19,7 @@ import io.github.stellorbit.infrastructure.persistence.repository.AuthPolicyRule
 import io.github.stellorbit.infrastructure.persistence.repository.BreakerRuleRepository;
 import io.github.stellorbit.infrastructure.persistence.repository.RateLimitRuleRepository;
 import io.github.stellorbit.infrastructure.persistence.repository.RouteRuleRepository;
-import io.github.stellorbit.interfaces.http.error.InvalidRuleRequestException;
+import io.github.stellorbit.api.error.InvalidRuleRequestException;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -99,7 +99,7 @@ public class StructuredGovernanceRuleContentCompiler implements GovernanceRuleCo
 
   private void putRuleSpecificContent(GovernanceRuleEntity rule, Map<String, Object> contentModel) {
     switch (rule.getRuleType()) {
-      case "ROUTE" -> contentModel.put("route", routeContent(rule));
+      case "ROUTE" -> contentModel.put("routes", routeContent(rule));
       case "BREAKER" -> contentModel.put("breaker", breakerContent(rule));
       case "RATE_LIMIT" -> contentModel.put("limit", rateLimitContent(rule));
       case "AUTH" -> contentModel.put("auth", authContent(rule));

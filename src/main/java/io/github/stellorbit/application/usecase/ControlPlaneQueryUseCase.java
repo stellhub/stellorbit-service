@@ -1,35 +1,40 @@
 package io.github.stellorbit.application.usecase;
 
+import io.github.stellorbit.infrastructure.persistence.entity.ApprovalTaskEntity;
 import io.github.stellorbit.infrastructure.persistence.entity.AuditEventEntity;
 import io.github.stellorbit.infrastructure.persistence.entity.GovernanceRuleEntity;
 import io.github.stellorbit.infrastructure.persistence.entity.ReleaseItemEntity;
+import io.github.stellorbit.infrastructure.persistence.entity.RuleReleaseApprovalEntity;
 import io.github.stellorbit.infrastructure.persistence.entity.RuleReleaseEntity;
 import io.github.stellorbit.infrastructure.persistence.entity.RuleValidationEntity;
 import io.github.stellorbit.infrastructure.persistence.entity.StellnulaPublishRecordEntity;
+import io.github.stellorbit.infrastructure.persistence.repository.ApprovalTaskRepository;
 import io.github.stellorbit.infrastructure.persistence.repository.AuditEventRepository;
 import io.github.stellorbit.infrastructure.persistence.repository.GovernanceRuleRepository;
 import io.github.stellorbit.infrastructure.persistence.repository.ReleaseItemRepository;
+import io.github.stellorbit.infrastructure.persistence.repository.RuleReleaseApprovalRepository;
 import io.github.stellorbit.infrastructure.persistence.repository.RuleReleaseRepository;
 import io.github.stellorbit.infrastructure.persistence.repository.RuleValidationRepository;
 import io.github.stellorbit.infrastructure.persistence.repository.StellnulaPublishRecordRepository;
-import io.github.stellorbit.interfaces.http.dto.ApprovalActionRequest;
-import io.github.stellorbit.interfaces.http.dto.ApprovalResponse;
-import io.github.stellorbit.interfaces.http.dto.BatchRuleEnabledResponse;
-import io.github.stellorbit.interfaces.http.dto.PageResponse;
-import io.github.stellorbit.interfaces.http.dto.ReleaseItemResponse;
-import io.github.stellorbit.interfaces.http.dto.RuleReleaseDiffResponse;
-import io.github.stellorbit.interfaces.http.dto.RuleReleaseImpactResponse;
-import io.github.stellorbit.interfaces.http.dto.RuleReleaseItemDiffResponse;
-import io.github.stellorbit.interfaces.http.dto.RuleReleaseResponse;
-import io.github.stellorbit.interfaces.http.dto.RuleReleaseSummaryResponse;
-import io.github.stellorbit.interfaces.http.dto.RuleSummaryResponse;
-import io.github.stellorbit.interfaces.http.dto.RuleValidationResponse;
-import io.github.stellorbit.interfaces.http.dto.StellnulaConfigDiffResponse;
-import io.github.stellorbit.interfaces.http.dto.StellnulaPublishRecordResponse;
-import io.github.stellorbit.interfaces.http.error.InvalidRuleRequestException;
-import io.github.stellorbit.interfaces.http.error.ResourceNotFoundException;
-import io.github.stellorbit.interfaces.http.security.ControlPlaneSecurityContextHolder;
+import io.github.stellorbit.api.dto.ApprovalActionRequest;
+import io.github.stellorbit.api.dto.ApprovalResponse;
+import io.github.stellorbit.api.dto.BatchRuleEnabledResponse;
+import io.github.stellorbit.api.dto.PageResponse;
+import io.github.stellorbit.api.dto.ReleaseItemResponse;
+import io.github.stellorbit.api.dto.RuleReleaseDiffResponse;
+import io.github.stellorbit.api.dto.RuleReleaseImpactResponse;
+import io.github.stellorbit.api.dto.RuleReleaseItemDiffResponse;
+import io.github.stellorbit.api.dto.RuleReleaseResponse;
+import io.github.stellorbit.api.dto.RuleReleaseSummaryResponse;
+import io.github.stellorbit.api.dto.RuleSummaryResponse;
+import io.github.stellorbit.api.dto.RuleValidationResponse;
+import io.github.stellorbit.api.dto.StellnulaConfigDiffResponse;
+import io.github.stellorbit.api.dto.StellnulaPublishRecordResponse;
+import io.github.stellorbit.api.error.InvalidRuleRequestException;
+import io.github.stellorbit.api.error.ResourceNotFoundException;
+import io.github.stellorbit.api.security.ControlPlaneSecurityContextHolder;
 import jakarta.persistence.criteria.Predicate;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -60,6 +65,8 @@ public class ControlPlaneQueryUseCase {
   private final StellnulaPublishRecordRepository stellnulaPublishRecordRepository;
   private final RuleValidationRepository ruleValidationRepository;
   private final AuditEventRepository auditEventRepository;
+  private final RuleReleaseApprovalRepository ruleReleaseApprovalRepository;
+  private final ApprovalTaskRepository approvalTaskRepository;
 
   public ControlPlaneQueryUseCase(
       GovernanceRuleRepository governanceRuleRepository,
@@ -67,13 +74,17 @@ public class ControlPlaneQueryUseCase {
       ReleaseItemRepository releaseItemRepository,
       StellnulaPublishRecordRepository stellnulaPublishRecordRepository,
       RuleValidationRepository ruleValidationRepository,
-      AuditEventRepository auditEventRepository) {
+      AuditEventRepository auditEventRepository,
+      RuleReleaseApprovalRepository ruleReleaseApprovalRepository,
+      ApprovalTaskRepository approvalTaskRepository) {
     this.governanceRuleRepository = governanceRuleRepository;
     this.ruleReleaseRepository = ruleReleaseRepository;
     this.releaseItemRepository = releaseItemRepository;
     this.stellnulaPublishRecordRepository = stellnulaPublishRecordRepository;
     this.ruleValidationRepository = ruleValidationRepository;
     this.auditEventRepository = auditEventRepository;
+    this.ruleReleaseApprovalRepository = ruleReleaseApprovalRepository;
+    this.approvalTaskRepository = approvalTaskRepository;
   }
 
   /** 分页搜索规则。 */
@@ -215,7 +226,21 @@ public class ControlPlaneQueryUseCase {
   @Transactional
   public ApprovalResponse submitApproval(UUID releaseId, ApprovalActionRequest request) {
     RuleReleaseEntity release = findRelease(releaseId);
-    return recordApprovalEvent(release, "RULE_RELEASE_APPROVAL_SUBMITTED", "PENDING", request);
+    RuleReleaseApprovalEntity approval =
+        ruleReleaseApprovalRepository
+            .findByReleaseId(releaseId)
+            .orElseGet(() -> createApproval(release, request));
+    if ("REJECTED".equals(approval.getApprovalStatus())
+        || "CANCELED".equals(approval.getApprovalStatus())) {
+      throw new InvalidRuleRequestException("当前发布审批已结束，不能重复提交");
+    }
+    release.setApprovalStatus(approval.getApprovalStatus());
+    if ("CREATED".equals(release.getReleaseStatus())
+        || "VALIDATING".equals(release.getReleaseStatus())) {
+      release.setReleaseStatus("APPROVAL_PENDING");
+    }
+    recordApprovalAudit(release, "RULE_RELEASE_APPROVAL_SUBMITTED", approval, null, request);
+    return toApprovalResponse(approval, null);
   }
 
   /** 通过发布审批。 */
@@ -223,7 +248,22 @@ public class ControlPlaneQueryUseCase {
   public ApprovalResponse approve(UUID releaseId, ApprovalActionRequest request) {
     RuleReleaseEntity release = findRelease(releaseId);
     validateApprover(release, request.operator());
-    return recordApprovalEvent(release, "RULE_RELEASE_APPROVED", "APPROVED", request);
+    RuleReleaseApprovalEntity approval = findOrCreateApproval(release, request);
+    ensurePendingApproval(approval);
+    ApprovalTaskEntity task = upsertApprovalTask(approval, release, request, "APPROVED");
+    approval.setApprovedCount(approvalTaskCount(approval.getId(), "APPROVED"));
+    approval.setRejectedCount(approvalTaskCount(approval.getId(), "REJECTED"));
+    if (approval.getApprovedCount() >= approval.getRequiredApprovals()) {
+      approval.setApprovalStatus("APPROVED");
+      approval.setCompletedAt(OffsetDateTime.now());
+      release.setApprovalStatus("APPROVED");
+      if ("APPROVAL_PENDING".equals(release.getReleaseStatus())) {
+        release.setReleaseStatus("APPROVED");
+      }
+    }
+    ruleReleaseApprovalRepository.save(approval);
+    recordApprovalAudit(release, "RULE_RELEASE_APPROVED", approval, task, request);
+    return toApprovalResponse(approval, task);
   }
 
   /** 驳回发布审批。 */
@@ -231,32 +271,101 @@ public class ControlPlaneQueryUseCase {
   public ApprovalResponse reject(UUID releaseId, ApprovalActionRequest request) {
     RuleReleaseEntity release = findRelease(releaseId);
     validateApprover(release, request.operator());
-    return recordApprovalEvent(release, "RULE_RELEASE_REJECTED", "REJECTED", request);
+    RuleReleaseApprovalEntity approval = findOrCreateApproval(release, request);
+    ensurePendingApproval(approval);
+    ApprovalTaskEntity task = upsertApprovalTask(approval, release, request, "REJECTED");
+    approval.setApprovedCount(approvalTaskCount(approval.getId(), "APPROVED"));
+    approval.setRejectedCount(approvalTaskCount(approval.getId(), "REJECTED"));
+    approval.setApprovalStatus("REJECTED");
+    approval.setCompletedAt(OffsetDateTime.now());
+    release.setApprovalStatus("REJECTED");
+    release.setReleaseStatus("REJECTED");
+    ruleReleaseApprovalRepository.save(approval);
+    recordApprovalAudit(release, "RULE_RELEASE_REJECTED", approval, task, request);
+    return toApprovalResponse(approval, task);
   }
 
   /** 查询发布审批时间线。 */
   @Transactional(readOnly = true)
   public List<ApprovalResponse> listApprovals(UUID releaseId) {
     findRelease(releaseId);
-    return auditEventRepository
-        .findByResourceTypeAndResourceIdOrderByCreatedAtDesc(RESOURCE_RULE_RELEASE, releaseId)
-        .stream()
-        .filter(
-            event ->
-                event.getEventType().startsWith("RULE_RELEASE_APPROVAL")
-                    || "RULE_RELEASE_APPROVED".equals(event.getEventType())
-                    || "RULE_RELEASE_REJECTED".equals(event.getEventType()))
-        .map(this::toApprovalResponse)
-        .toList();
+    RuleReleaseApprovalEntity approval =
+        ruleReleaseApprovalRepository.findByReleaseId(releaseId).orElse(null);
+    if (approval == null) {
+      return List.of();
+    }
+    List<ApprovalResponse> responses = new ArrayList<>();
+    responses.add(toApprovalResponse(approval, null));
+    approvalTaskRepository.findByApprovalIdOrderByCreatedAtAsc(approval.getId()).stream()
+        .map(task -> toApprovalResponse(approval, task))
+        .forEach(responses::add);
+    return responses;
   }
 
-  private ApprovalResponse recordApprovalEvent(
+  private RuleReleaseApprovalEntity createApproval(
+      RuleReleaseEntity release, ApprovalActionRequest request) {
+    RuleReleaseApprovalEntity approval = new RuleReleaseApprovalEntity();
+    approval.setReleaseId(release.getId());
+    approval.setInstanceSpaceId(release.getInstanceSpaceId());
+    approval.setApplicationId(release.getApplicationId());
+    approval.setApprovalStatus("PENDING");
+    approval.setRequiredApprovals(1);
+    approval.setSubmittedBy(request.operator());
+    approval.setSubmittedReason(request.reason());
+    return ruleReleaseApprovalRepository.saveAndFlush(approval);
+  }
+
+  private RuleReleaseApprovalEntity findOrCreateApproval(
+      RuleReleaseEntity release, ApprovalActionRequest request) {
+    return ruleReleaseApprovalRepository
+        .findByReleaseId(release.getId())
+        .orElseGet(() -> createApproval(release, request));
+  }
+
+  private void ensurePendingApproval(RuleReleaseApprovalEntity approval) {
+    if (!"PENDING".equals(approval.getApprovalStatus())) {
+      throw new InvalidRuleRequestException("当前发布审批已经结束");
+    }
+  }
+
+  private ApprovalTaskEntity upsertApprovalTask(
+      RuleReleaseApprovalEntity approval,
+      RuleReleaseEntity release,
+      ApprovalActionRequest request,
+      String taskStatus) {
+    ApprovalTaskEntity task =
+        approvalTaskRepository
+            .findByApprovalIdAndApprover(approval.getId(), request.operator())
+            .orElseGet(ApprovalTaskEntity::new);
+    task.setApprovalId(approval.getId());
+    task.setReleaseId(release.getId());
+    task.setInstanceSpaceId(release.getInstanceSpaceId());
+    task.setApplicationId(release.getApplicationId());
+    task.setApprover(request.operator());
+    task.setTaskStatus(taskStatus);
+    task.setReason(request.reason());
+    task.setActionAt(OffsetDateTime.now());
+    return approvalTaskRepository.saveAndFlush(task);
+  }
+
+  private int approvalTaskCount(UUID approvalId, String taskStatus) {
+    return (int)
+        approvalTaskRepository.findByApprovalIdOrderByCreatedAtAsc(approvalId).stream()
+            .filter(task -> taskStatus.equals(task.getTaskStatus()))
+            .count();
+  }
+
+  private void recordApprovalAudit(
       RuleReleaseEntity release,
       String eventType,
-      String approvalStatus,
+      RuleReleaseApprovalEntity approval,
+      ApprovalTaskEntity task,
       ApprovalActionRequest request) {
     Map<String, Object> detail = new LinkedHashMap<>();
-    detail.put("approvalStatus", approvalStatus);
+    detail.put("approvalId", approval.getId());
+    detail.put("approvalStatus", approval.getApprovalStatus());
+    detail.put("taskId", task == null ? null : task.getId());
+    detail.put("taskStatus", task == null ? null : task.getTaskStatus());
     detail.put("releaseVersion", release.getReleaseVersion());
     detail.put("releaseName", release.getReleaseName());
     detail.put("reason", request.reason());
@@ -270,15 +379,7 @@ public class ControlPlaneQueryUseCase {
     event.setApplicationId(release.getApplicationId());
     event.setOperator(request.operator());
     event.setEventDetail(detail);
-    event = auditEventRepository.saveAndFlush(event);
-    return new ApprovalResponse(
-        event.getId(),
-        release.getId(),
-        approvalStatus,
-        request.operator(),
-        request.reason(),
-        detail,
-        event.getCreatedAt());
+    auditEventRepository.saveAndFlush(event);
   }
 
   private void validateApprover(RuleReleaseEntity release, String operator) {
@@ -288,19 +389,24 @@ public class ControlPlaneQueryUseCase {
     }
   }
 
-  private ApprovalResponse toApprovalResponse(AuditEventEntity event) {
-    Map<String, Object> detail = event.getEventDetail();
-    Object releaseId = event.getResourceId();
-    Object approvalStatus = detail == null ? null : detail.get("approvalStatus");
-    Object reason = detail == null ? null : detail.get("reason");
+  private ApprovalResponse toApprovalResponse(
+      RuleReleaseApprovalEntity approval, ApprovalTaskEntity task) {
+    Map<String, Object> detail = new LinkedHashMap<>();
+    detail.put("requiredApprovals", approval.getRequiredApprovals());
+    detail.put("approvedCount", approval.getApprovedCount());
+    detail.put("rejectedCount", approval.getRejectedCount());
+    detail.put("submittedBy", approval.getSubmittedBy());
+    detail.put("submittedReason", approval.getSubmittedReason());
+    detail.put("completedAt", approval.getCompletedAt());
     return new ApprovalResponse(
-        event.getId(),
-        releaseId instanceof UUID uuid ? uuid : event.getResourceId(),
-        Objects.toString(approvalStatus, "UNKNOWN"),
-        event.getOperator(),
-        reason == null ? null : reason.toString(),
+        approval.getId(),
+        approval.getReleaseId(),
+        task == null ? null : task.getId(),
+        task == null ? approval.getApprovalStatus() : task.getTaskStatus(),
+        task == null ? approval.getSubmittedBy() : task.getApprover(),
+        task == null ? approval.getSubmittedReason() : task.getReason(),
         detail,
-        event.getCreatedAt());
+        task == null ? approval.getSubmittedAt() : task.getCreatedAt());
   }
 
   private Specification<GovernanceRuleEntity> ruleSpec(

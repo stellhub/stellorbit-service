@@ -7,9 +7,9 @@ import io.github.stellorbit.infrastructure.persistence.entity.RateLimitQuotaAssi
 import io.github.stellorbit.infrastructure.persistence.entity.RateLimitQuotaPolicyEntity;
 import io.github.stellorbit.infrastructure.persistence.repository.RateLimitQuotaAssignmentRepository;
 import io.github.stellorbit.infrastructure.persistence.repository.RateLimitQuotaPolicyRepository;
-import io.github.stellorbit.interfaces.http.dto.RateLimitQuotaLeaseRequest;
-import io.github.stellorbit.interfaces.http.dto.RateLimitQuotaLeaseResponse;
-import io.github.stellorbit.interfaces.http.error.InvalidRuleRequestException;
+import io.github.stellorbit.api.dto.RateLimitQuotaLeaseRequest;
+import io.github.stellorbit.api.dto.RateLimitQuotaLeaseResponse;
+import io.github.stellorbit.api.error.InvalidRuleRequestException;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import org.springframework.stereotype.Service;

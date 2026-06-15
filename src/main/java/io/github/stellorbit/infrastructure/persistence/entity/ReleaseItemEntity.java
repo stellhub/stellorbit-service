@@ -10,6 +10,8 @@ import jakarta.persistence.Table;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import lombok.Getter;
@@ -47,6 +49,25 @@ public class ReleaseItemEntity implements Identifiable {
 
   @NotNull(message = "草稿版本不能为空") @Column(name = "draft_version", nullable = false)
   private Long draftVersion;
+
+  @Column(name = "schema_version", nullable = false, length = 64)
+  private String schemaVersion = "stellorbit.governance.v1";
+
+  @Column(name = "protocol_version", nullable = false, length = 64)
+  private String protocolVersion = "stellorbit.runtime.protocol.v1";
+
+  @Column(name = "min_client_version", length = 80)
+  private String minClientVersion;
+
+  @Column(name = "max_client_version", length = 80)
+  private String maxClientVersion;
+
+  @Column(name = "compatibility_status", nullable = false, length = 32)
+  private String compatibilityStatus = "COMPATIBLE";
+
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(name = "compatibility_messages", nullable = false, columnDefinition = "jsonb")
+  private List<Object> compatibilityMessages = new ArrayList<>();
 
   @NotNull(message = "优先级不能为空") @Column(nullable = false)
   private Integer priority;

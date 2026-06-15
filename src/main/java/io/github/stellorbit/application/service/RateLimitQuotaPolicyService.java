@@ -6,8 +6,8 @@ import io.github.stellorbit.infrastructure.persistence.entity.RateLimitRuleEntit
 import io.github.stellorbit.infrastructure.persistence.repository.GovernanceRuleRepository;
 import io.github.stellorbit.infrastructure.persistence.repository.RateLimitQuotaPolicyRepository;
 import io.github.stellorbit.infrastructure.persistence.repository.RateLimitRuleRepository;
-import io.github.stellorbit.interfaces.http.error.InvalidRuleRequestException;
-import io.github.stellorbit.interfaces.http.error.ResourceNotFoundException;
+import io.github.stellorbit.api.error.InvalidRuleRequestException;
+import io.github.stellorbit.api.error.ResourceNotFoundException;
 import java.math.BigDecimal;
 import java.util.Map;
 import java.util.Set;

@@ -3,9 +3,9 @@ package io.github.stellorbit.application.service;
 import io.github.stellorbit.infrastructure.persistence.entity.RouteRuleEntity;
 import io.github.stellorbit.infrastructure.persistence.repository.GovernanceRuleRepository;
 import io.github.stellorbit.infrastructure.persistence.repository.RouteRuleRepository;
-import io.github.stellorbit.interfaces.http.dto.CreateRouteRuleRequest;
-import io.github.stellorbit.interfaces.http.dto.RouteRuleDetailRequest;
-import io.github.stellorbit.interfaces.http.dto.RouteRuleDetailResponse;
+import io.github.stellorbit.api.dto.CreateRouteRuleRequest;
+import io.github.stellorbit.api.dto.RouteRuleDetailRequest;
+import io.github.stellorbit.api.dto.RouteRuleDetailResponse;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 

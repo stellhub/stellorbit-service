@@ -7,6 +7,7 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import jakarta.persistence.Version;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import java.time.OffsetDateTime;
@@ -56,6 +57,28 @@ public class RuleReleaseEntity implements Identifiable {
 
   @Column(name = "runtime_format", nullable = false, length = 32)
   private String runtimeFormat = "JSON";
+
+  @Column(name = "schema_version", nullable = false, length = 64)
+  private String schemaVersion = "stellorbit.governance.v1";
+
+  @Column(name = "protocol_version", nullable = false, length = 64)
+  private String protocolVersion = "stellorbit.runtime.protocol.v1";
+
+  @Column(name = "min_client_version", length = 80)
+  private String minClientVersion;
+
+  @Column(name = "max_client_version", length = 80)
+  private String maxClientVersion;
+
+  @Column(name = "compatibility_status", nullable = false, length = 32)
+  private String compatibilityStatus = "COMPATIBLE";
+
+  @JdbcTypeCode(SqlTypes.JSON)
+  @Column(name = "compatibility_messages", nullable = false, columnDefinition = "jsonb")
+  private List<Object> compatibilityMessages = new ArrayList<>();
+
+  @Column(name = "approval_status", nullable = false, length = 32)
+  private String approvalStatus = "NOT_REQUIRED";
 
   @JdbcTypeCode(SqlTypes.JSON)
   @Column(name = "release_snapshot_json", columnDefinition = "jsonb")
@@ -111,4 +134,8 @@ public class RuleReleaseEntity implements Identifiable {
   @UpdateTimestamp
   @Column(name = "updated_at", nullable = false)
   private OffsetDateTime updatedAt;
+
+  @Version
+  @Column(name = "row_version", nullable = false)
+  private Long rowVersion = 0L;
 }

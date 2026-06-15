@@ -32,16 +32,16 @@ import io.github.stellorbit.infrastructure.persistence.repository.PublishLockRep
 import io.github.stellorbit.infrastructure.persistence.repository.ReleaseItemRepository;
 import io.github.stellorbit.infrastructure.persistence.repository.RuleReleaseRepository;
 import io.github.stellorbit.infrastructure.persistence.repository.StellnulaPublishRecordRepository;
-import io.github.stellorbit.interfaces.http.dto.PublishGovernanceRulesRequest;
-import io.github.stellorbit.interfaces.http.dto.RecoverRuleReleaseRequest;
-import io.github.stellorbit.interfaces.http.dto.ReleaseItemResponse;
-import io.github.stellorbit.interfaces.http.dto.RetryRuleReleaseRequest;
-import io.github.stellorbit.interfaces.http.dto.RollbackRuleReleaseRequest;
-import io.github.stellorbit.interfaces.http.dto.RuleReleaseResponse;
-import io.github.stellorbit.interfaces.http.dto.StellnulaPublishRecordResponse;
-import io.github.stellorbit.interfaces.http.error.InvalidRuleRequestException;
-import io.github.stellorbit.interfaces.http.error.ResourceNotFoundException;
-import io.github.stellorbit.interfaces.http.security.ControlPlaneSecurityContextHolder;
+import io.github.stellorbit.api.dto.PublishGovernanceRulesRequest;
+import io.github.stellorbit.api.dto.RecoverRuleReleaseRequest;
+import io.github.stellorbit.api.dto.ReleaseItemResponse;
+import io.github.stellorbit.api.dto.RetryRuleReleaseRequest;
+import io.github.stellorbit.api.dto.RollbackRuleReleaseRequest;
+import io.github.stellorbit.api.dto.RuleReleaseResponse;
+import io.github.stellorbit.api.dto.StellnulaPublishRecordResponse;
+import io.github.stellorbit.api.error.InvalidRuleRequestException;
+import io.github.stellorbit.api.error.ResourceNotFoundException;
+import io.github.stellorbit.api.security.ControlPlaneSecurityContextHolder;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -66,8 +66,11 @@ public class PublishGovernanceRulesUseCase {
 
   private static final Set<String> RUNTIME_FORMATS = Set.of("JSON", "PROTOBUF");
   private static final String GOVERNANCE_NAMESPACE = "governance";
+  private static final String SECURITY_NAMESPACE = "governance-security";
+  private static final String SECURITY_CONFIG_GROUP = "security-materials";
   private static final String DEFAULT_CONFIG_GROUP = "service-governance";
   private static final String DEFAULT_SCOPE = "default";
+  private static final String RUNTIME_PROTOCOL_VERSION = "stellorbit.runtime.protocol.v1";
   private static final int DEFAULT_MAX_RETRY_COUNT = 3;
   private static final long PUBLISH_LOCK_TTL_SECONDS = 300;
 
@@ -207,11 +210,12 @@ public class PublishGovernanceRulesUseCase {
       List<GovernanceRuleEntity> rules = findRules(request);
       validateRuleSelection(request, rules);
       List<CompiledGovernanceRule> compiledRules = compileRules(rules, application);
-      validateSemanticChecks(request, compiledRules);
+      RuleSemanticCheckResult semanticCheckResult = validateSemanticChecks(request, compiledRules);
       List<Map<String, Object>> itemSnapshots = buildItemSnapshots(compiledRules);
       Map<String, Object> releaseSnapshot =
           buildReleaseSnapshot(request, runtimeFormat, itemSnapshots, application);
       String releasePayload = toJson(releaseSnapshot);
+      setReleaseCompatibilityMetadata(release, compiledRules, semanticCheckResult);
       setReleasePayload(release, runtimeFormat, releaseSnapshot, releasePayload);
       release.setChecksum(sha256(releasePayload));
 
@@ -949,6 +953,13 @@ public class PublishGovernanceRulesUseCase {
     release.setIdempotencyKey(idempotencyKey);
     release.setSourceFormat("CUE");
     release.setRuntimeFormat("JSON");
+    release.setSchemaVersion(sourceRelease.getSchemaVersion());
+    release.setProtocolVersion(sourceRelease.getProtocolVersion());
+    release.setMinClientVersion(sourceRelease.getMinClientVersion());
+    release.setMaxClientVersion(sourceRelease.getMaxClientVersion());
+    release.setCompatibilityStatus(sourceRelease.getCompatibilityStatus());
+    release.setCompatibilityMessages(new ArrayList<>(sourceRelease.getCompatibilityMessages()));
+    release.setApprovalStatus("NOT_REQUIRED");
     release.setReleaseSnapshotJson(releaseSnapshot);
     release.setReleaseSnapshotBytes(null);
     release.setChecksum(sha256(releasePayload));
@@ -977,6 +988,8 @@ public class PublishGovernanceRulesUseCase {
     snapshot.put("releaseName", releaseName);
     snapshot.put("sourceFormat", "CUE");
     snapshot.put("runtimeFormat", "JSON");
+    snapshot.put("schemaVersion", sourceRelease.getSchemaVersion());
+    snapshot.put("protocolVersion", sourceRelease.getProtocolVersion());
     snapshot.put("sourceReleaseSnapshot", sourceRelease.getReleaseSnapshotJson());
     return snapshot;
   }
@@ -992,6 +1005,12 @@ public class PublishGovernanceRulesUseCase {
       item.setRuleCode(sourceItem.getRuleCode());
       item.setRuleName(sourceItem.getRuleName());
       item.setDraftVersion(sourceItem.getDraftVersion());
+      item.setSchemaVersion(sourceItem.getSchemaVersion());
+      item.setProtocolVersion(sourceItem.getProtocolVersion());
+      item.setMinClientVersion(sourceItem.getMinClientVersion());
+      item.setMaxClientVersion(sourceItem.getMaxClientVersion());
+      item.setCompatibilityStatus(sourceItem.getCompatibilityStatus());
+      item.setCompatibilityMessages(new ArrayList<>(sourceItem.getCompatibilityMessages()));
       item.setPriority(sourceItem.getPriority());
       item.setCueSource(sourceItem.getCueSource());
       item.setRuntimeSnapshotJson(copyMap(sourceItem.getRuntimeSnapshotJson()));
@@ -1101,7 +1120,7 @@ public class PublishGovernanceRulesUseCase {
     return compiledRules;
   }
 
-  private void validateSemanticChecks(
+  private RuleSemanticCheckResult validateSemanticChecks(
       PublishGovernanceRulesRequest request, List<CompiledGovernanceRule> compiledRules) {
     RuleSemanticCheckResult conflictResult = governanceRuleConflictDetector.detect(compiledRules);
     if (conflictResult.hasErrors()) {
@@ -1118,6 +1137,10 @@ public class PublishGovernanceRulesUseCase {
     if (compatibilityResult.hasErrors()) {
       throw new InvalidRuleRequestException(String.join("; ", compatibilityResult.errors()));
     }
+    List<String> warnings = new ArrayList<>();
+    warnings.addAll(conflictResult.warnings());
+    warnings.addAll(compatibilityResult.warnings());
+    return new RuleSemanticCheckResult(List.of(), warnings);
   }
 
   private List<Map<String, Object>> buildItemSnapshots(List<CompiledGovernanceRule> rules) {
@@ -1141,6 +1164,7 @@ public class PublishGovernanceRulesUseCase {
     snapshot.put("releaseName", request.releaseName());
     snapshot.put("sourceFormat", "CUE");
     snapshot.put("runtimeFormat", runtimeFormat);
+    snapshot.put("protocolVersion", RUNTIME_PROTOCOL_VERSION);
     snapshot.put("rules", itemSnapshots);
     return snapshot;
   }
@@ -1181,6 +1205,16 @@ public class PublishGovernanceRulesUseCase {
     release.setReleaseSnapshotBytes(releasePayload.getBytes(StandardCharsets.UTF_8));
   }
 
+  private void setReleaseCompatibilityMetadata(
+      RuleReleaseEntity release,
+      List<CompiledGovernanceRule> compiledRules,
+      RuleSemanticCheckResult semanticCheckResult) {
+    release.setSchemaVersion(commonSchemaVersion(compiledRules));
+    release.setProtocolVersion(RUNTIME_PROTOCOL_VERSION);
+    release.setCompatibilityStatus("COMPATIBLE");
+    release.setCompatibilityMessages(new ArrayList<>(semanticCheckResult.warnings()));
+  }
+
   private List<ReleaseItemEntity> createReleaseItems(
       UUID releaseId, List<CompiledGovernanceRule> rules, String runtimeFormat) {
     List<ReleaseItemEntity> items = new ArrayList<>();
@@ -1195,6 +1229,10 @@ public class PublishGovernanceRulesUseCase {
       item.setRuleCode(rule.getRuleCode());
       item.setRuleName(rule.getRuleName());
       item.setDraftVersion(rule.getDraftVersion());
+      item.setSchemaVersion(compiledRule.schemaVersion());
+      item.setProtocolVersion(RUNTIME_PROTOCOL_VERSION);
+      item.setCompatibilityStatus("COMPATIBLE");
+      item.setCompatibilityMessages(new ArrayList<>(compiledRule.warnings()));
       item.setPriority(rule.getPriority());
       item.setCueSource(rule.getCueSource());
       if ("JSON".equals(runtimeFormat)) {
@@ -1206,6 +1244,15 @@ public class PublishGovernanceRulesUseCase {
       items.add(item);
     }
     return items;
+  }
+
+  private String commonSchemaVersion(List<CompiledGovernanceRule> compiledRules) {
+    return compiledRules.stream()
+        .map(CompiledGovernanceRule::schemaVersion)
+        .filter(Objects::nonNull)
+        .distinct()
+        .reduce((left, right) -> "mixed")
+        .orElse("stellorbit.governance.v1");
   }
 
   private List<StellnulaPublishRecordEntity> createPublishRecords(
@@ -1368,8 +1415,8 @@ public class PublishGovernanceRulesUseCase {
     record.setInstanceSpaceId(release.getInstanceSpaceId());
     record.setApplicationId(release.getApplicationId());
     record.setPublishKind(publishKind);
-    record.setNamespaceCode(GOVERNANCE_NAMESPACE);
-    record.setConfigGroup(configGroup);
+    record.setNamespaceCode(SECURITY_NAMESPACE);
+    record.setConfigGroup(SECURITY_CONFIG_GROUP);
     record.setConfigKey(dataId);
     record.setDataId(dataId);
     record.setContentType("application/json");

@@ -3,9 +3,9 @@ package io.github.stellorbit.application.service;
 import io.github.stellorbit.infrastructure.persistence.entity.RateLimitRuleEntity;
 import io.github.stellorbit.infrastructure.persistence.repository.GovernanceRuleRepository;
 import io.github.stellorbit.infrastructure.persistence.repository.RateLimitRuleRepository;
-import io.github.stellorbit.interfaces.http.dto.CreateRateLimitRuleRequest;
-import io.github.stellorbit.interfaces.http.dto.RateLimitRuleDetailRequest;
-import io.github.stellorbit.interfaces.http.dto.RateLimitRuleDetailResponse;
+import io.github.stellorbit.api.dto.CreateRateLimitRuleRequest;
+import io.github.stellorbit.api.dto.RateLimitRuleDetailRequest;
+import io.github.stellorbit.api.dto.RateLimitRuleDetailResponse;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 
