@@ -1,9 +1,7 @@
 package io.github.stellorbit.api;
 
-import io.github.stellorbit.application.service.GovernanceRuleService;
 import io.github.stellorbit.application.usecase.ControlPlaneQueryUseCase;
 import io.github.stellorbit.application.usecase.ValidateGovernanceRuleUseCase;
-import io.github.stellorbit.infrastructure.persistence.entity.GovernanceRuleEntity;
 import io.github.stellorbit.api.dto.BatchRuleEnabledRequest;
 import io.github.stellorbit.api.dto.BatchRuleEnabledResponse;
 import io.github.stellorbit.api.dto.PageResponse;
@@ -24,16 +22,14 @@ import org.springframework.web.bind.annotation.RestController;
 
 @RestController
 @RequestMapping("/api/stellorbit/governance-rules")
-public class GovernanceRuleController extends CrudController<GovernanceRuleEntity> {
+public class GovernanceRuleController {
 
   private final ValidateGovernanceRuleUseCase validateGovernanceRuleUseCase;
   private final ControlPlaneQueryUseCase controlPlaneQueryUseCase;
 
   public GovernanceRuleController(
-      GovernanceRuleService service,
       ValidateGovernanceRuleUseCase validateGovernanceRuleUseCase,
       ControlPlaneQueryUseCase controlPlaneQueryUseCase) {
-    super(service);
     this.validateGovernanceRuleUseCase = validateGovernanceRuleUseCase;
     this.controlPlaneQueryUseCase = controlPlaneQueryUseCase;
   }

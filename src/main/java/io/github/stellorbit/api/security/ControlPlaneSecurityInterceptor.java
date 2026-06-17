@@ -135,8 +135,7 @@ public class ControlPlaneSecurityInterceptor implements HandlerInterceptor {
   }
 
   private boolean requiresInstanceSpaceScope(HttpServletRequest request) {
-    String path = request.getRequestURI();
-    return !path.startsWith("/api/stellorbit/instance-spaces");
+    return true;
   }
 
   private boolean isMutation(HttpServletRequest request) {

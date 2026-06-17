@@ -246,7 +246,7 @@ JSON 兼容策略：
 | Header | 说明 |
 | --- | --- |
 | `X-Stellorbit-Tenant-Id` | 当前租户 ID，实例空间和审计事件会按租户隔离 |
-| `X-Stellorbit-Instance-Space-Id` | 当前实例空间 ID，除实例空间自身管理接口外必须传递 |
+| `X-Stellorbit-Instance-Space-Id` | 当前实例空间 ID，控制面接口必须传递 |
 | `X-Stellorbit-Operator` | 当前操作人，服务端以该值写入创建人、更新人、发布人、审批人和审计人 |
 | `X-Stellorbit-Roles` | 当前角色列表，逗号分隔，支持 `ADMIN`、`VIEWER`、`OPERATOR`、`PUBLISHER`、`APPROVER`、`SECURITY_ADMIN` |
 | `X-Stellorbit-Reason` | 操作原因，所有 `POST`、`PUT`、`PATCH`、`DELETE` 控制面写操作必须传递 |
@@ -254,17 +254,9 @@ JSON 兼容策略：
 
 RBAC 首版约定：查询接口允许只读角色访问；规则、证书和基础资源写操作需要 `OPERATOR`；发布、重试、回滚和人工恢复需要 `PUBLISHER`；审批通过和驳回需要 `APPROVER`；证书等安全资源需要 `SECURITY_ADMIN` 或 `OPERATOR`；`ADMIN` 拥有所有控制面权限。发布审批会校验审批人不能和发布创建人或发布人相同。
 
-发布审批由 `rule_release_approvals` 和 `approval_tasks` 作为状态事实源，`audit_events` 只负责不可变操作留痕。控制面写操作会统一写入 `audit_events`，记录租户、实例空间、操作人、操作原因、请求路径、HTTP 状态、请求 ID、角色、来源 IP 和 User-Agent。运行时限流 API 不走这套控制面拦截和审计链路，避免高 QPS 请求被控制面权限模型影响。
+发布审批由 `rule_release_approvals` 和 `approval_tasks` 作为状态事实源，`audit_events` 只负责不可变操作留痕。控制面写操作会统一写入 `audit_events`，记录租户、实例空间、操作人、操作原因、请求路径、HTTP 状态、请求 ID、角色、来源 IP 和 User-Agent。运行时规则拉取接口不走这套控制面拦截和审计链路，避免客户端规则同步被控制面权限模型影响。
 
 ```text
-POST   /api/stellorbit/instance-spaces
-GET    /api/stellorbit/instance-spaces
-PATCH  /api/stellorbit/instance-spaces/{spaceId}
-
-POST   /api/stellorbit/applications
-GET    /api/stellorbit/applications
-PATCH  /api/stellorbit/applications/{applicationId}
-
 POST   /api/stellorbit/rules/routes
 GET    /api/stellorbit/rules/routes
 GET    /api/stellorbit/rules/routes/{ruleId}
@@ -288,10 +280,6 @@ GET    /api/stellorbit/rules/auth
 GET    /api/stellorbit/rules/auth/{ruleId}
 PATCH  /api/stellorbit/rules/auth/{ruleId}
 DELETE /api/stellorbit/rules/auth/{ruleId}
-
-POST   /api/stellorbit/security/mtls-certificates
-GET    /api/stellorbit/security/mtls-certificates
-PATCH  /api/stellorbit/security/mtls-certificates/{certificateId}
 
 POST   /api/stellorbit/rule-releases
 POST   /api/stellorbit/rule-releases/dry-run
