@@ -24,6 +24,60 @@ management:
       exposure:
         include: health,info,metrics,prometheus
 
+stellflux:
+  opentelemetry:
+    enabled: ${STELLFLUX_OTEL_ENABLED:true}
+    register-global: ${STELLFLUX_OTEL_REGISTER_GLOBAL:false}
+    endpoint: ${STELLFLUX_OTEL_ENDPOINT:http://localhost:4318}
+    protocol: ${STELLFLUX_OTEL_PROTOCOL:http/protobuf}
+    logs-output: ${STELLFLUX_OTEL_LOGS_OUTPUT:otlp}
+    logs-format: ${STELLFLUX_OTEL_LOGS_FORMAT:json}
+    metric-export-interval: ${STELLFLUX_OTEL_METRIC_EXPORT_INTERVAL:30s}
+    batch-timeout: ${STELLFLUX_OTEL_BATCH_TIMEOUT:5s}
+    export-timeout: ${STELLFLUX_OTEL_EXPORT_TIMEOUT:3s}
+    trace-sample-ratio: ${STELLFLUX_OTEL_TRACE_SAMPLE_RATIO:1.0}
+    fallback-file-path: ${STELLFLUX_OTEL_FALLBACK_FILE_PATH:logs/stellorbit-service-fallback.log}
+    resource:
+      service-name: ${STELLFLUX_SERVICE_NAME:stellorbit-service}
+      service-namespace: ${STELLFLUX_SERVICE_NAMESPACE:stellhub}
+      service-version: ${STELLFLUX_SERVICE_VERSION:0.0.1}
+      service-instance-id: ${STELLFLUX_SERVICE_INSTANCE_ID:local}
+      deployment-environment-name: ${STELLFLUX_DEPLOYMENT_ENV:local}
+      cloud-region: ${STELLFLUX_CLOUD_REGION:local}
+      cloud-availability-zone: ${STELLFLUX_CLOUD_AVAILABILITY_ZONE:local}
+    logs:
+      enabled: ${STELLFLUX_OTEL_LOGS_ENABLED:true}
+    metrics:
+      enabled: ${STELLFLUX_OTEL_METRICS_ENABLED:true}
+    traces:
+      enabled: ${STELLFLUX_OTEL_TRACES_ENABLED:true}
+  http:
+    server:
+      telemetry:
+        enabled: ${STELLFLUX_HTTP_SERVER_TELEMETRY_ENABLED:true}
+        url-patterns:
+          - /*
+        excluded-paths:
+          - /actuator/health
+          - /actuator/info
+          - /actuator/metrics
+          - /actuator/prometheus
+        response-trace-header-enabled: ${STELLFLUX_HTTP_SERVER_RESPONSE_TRACE_HEADER_ENABLED:true}
+    client:
+      clients:
+        stellnula-service:
+          base-url: ${STELLORBIT_STELLNULA_BASE_URL:http://127.0.0.1:8060}
+          connect-timeout-millis: ${STELLFLUX_STELLNULA_CONNECT_TIMEOUT_MILLIS:3000}
+          read-timeout-millis: ${STELLFLUX_STELLNULA_READ_TIMEOUT_MILLIS:5000}
+          write-timeout-millis: ${STELLFLUX_STELLNULA_WRITE_TIMEOUT_MILLIS:5000}
+          call-timeout-millis: ${STELLFLUX_STELLNULA_CALL_TIMEOUT_MILLIS:10000}
+          retry-on-connection-failure: ${STELLFLUX_STELLNULA_RETRY_ON_CONNECTION_FAILURE:true}
+          follow-redirects: ${STELLFLUX_STELLNULA_FOLLOW_REDIRECTS:true}
+          follow-ssl-redirects: ${STELLFLUX_STELLNULA_FOLLOW_SSL_REDIRECTS:true}
+  log:
+    enabled: ${STELLFLUX_LOG_ENABLED:true}
+    instrumentation-scope-name: ${STELLFLUX_LOG_INSTRUMENTATION_SCOPE:stellorbit-service}
+
 stellorbit:
   cue:
     binary: ${STELLORBIT_CUE_BINARY:cue}
