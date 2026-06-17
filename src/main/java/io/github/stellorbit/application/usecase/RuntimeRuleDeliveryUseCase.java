@@ -1,8 +1,4 @@
 package io.github.stellorbit.application.usecase;
-
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import io.github.stellorbit.application.runtime.RuntimeNodeDirectory;
 import io.github.stellorbit.infrastructure.persistence.entity.ClientRuntimeAckEntity;
 import io.github.stellorbit.infrastructure.persistence.entity.ClientRuntimeSessionEntity;
 import io.github.stellorbit.infrastructure.persistence.entity.ClientRuntimeStatusReportEntity;
@@ -23,14 +19,11 @@ import io.github.stellorbit.api.dto.ClientRuleStatusReportResponse;
 import io.github.stellorbit.api.dto.ClientRuntimeInstanceResponse;
 import io.github.stellorbit.api.dto.ClientVersionNegotiationRequest;
 import io.github.stellorbit.api.dto.ClientVersionNegotiationResponse;
-import io.github.stellorbit.api.dto.RuntimeNodeDirectoryResponse;
 import io.github.stellorbit.api.dto.RuntimeRuleSnapshotResponse;
 import io.github.stellorbit.api.dto.RuntimeSnapshotRuleResponse;
 import io.github.stellorbit.api.error.InvalidRuleRequestException;
 import io.github.stellorbit.api.error.ResourceNotFoundException;
-import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
-import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -46,7 +39,7 @@ public class RuntimeRuleDeliveryUseCase {
 
   private static final String PROTOCOL_VERSION = "stellorbit.runtime.protocol.v1";
   private static final String SNAPSHOT_SCHEMA_VERSION = "stellorbit.runtime.snapshot.v1";
-  private static final String COMPATIBILITY_MODE = "JSON_CANONICAL_PROTOBUF_OPTIONAL";
+  private static final String COMPATIBILITY_MODE = "JSON_ONLY";
   private static final long HEARTBEAT_TTL_MILLIS = 30_000L;
   private static final List<String> DELIVERABLE_RELEASE_STATUSES = List.of("PUBLISHED");
 
@@ -55,24 +48,18 @@ public class RuntimeRuleDeliveryUseCase {
   private final ClientRuntimeSessionRepository sessionRepository;
   private final ClientRuntimeAckRepository ackRepository;
   private final ClientRuntimeStatusReportRepository statusReportRepository;
-  private final RuntimeNodeDirectory runtimeNodeDirectory;
-  private final ObjectMapper objectMapper;
 
   public RuntimeRuleDeliveryUseCase(
       RuleReleaseRepository ruleReleaseRepository,
       ReleaseItemRepository releaseItemRepository,
       ClientRuntimeSessionRepository sessionRepository,
       ClientRuntimeAckRepository ackRepository,
-      ClientRuntimeStatusReportRepository statusReportRepository,
-      RuntimeNodeDirectory runtimeNodeDirectory,
-      ObjectMapper objectMapper) {
+      ClientRuntimeStatusReportRepository statusReportRepository) {
     this.ruleReleaseRepository = ruleReleaseRepository;
     this.releaseItemRepository = releaseItemRepository;
     this.sessionRepository = sessionRepository;
     this.ackRepository = ackRepository;
     this.statusReportRepository = statusReportRepository;
-    this.runtimeNodeDirectory = runtimeNodeDirectory;
-    this.objectMapper = objectMapper;
   }
 
   /** 协商客户端运行时规则协议版本和快照格式。 */
@@ -82,7 +69,6 @@ public class RuntimeRuleDeliveryUseCase {
       throw new InvalidRuleRequestException("客户端不支持当前Stellorbit运行时协议版本");
     }
     String runtimeFormat = negotiateRuntimeFormat(request.acceptedRuntimeFormats());
-    RuntimeNodeDirectoryResponse directory = runtimeNodeDirectory.currentDirectory();
     upsertSession(
         request.instanceSpaceId(),
         request.applicationId(),
@@ -96,8 +82,7 @@ public class RuntimeRuleDeliveryUseCase {
         null,
         null,
         request.labels(),
-        request.metadata(),
-        directory.ringVersion());
+        request.metadata());
     return new ClientVersionNegotiationResponse(
         PROTOCOL_VERSION,
         SNAPSHOT_SCHEMA_VERSION,
@@ -108,8 +93,6 @@ public class RuntimeRuleDeliveryUseCase {
         "/api/stellorbit/runtime/rules/acks",
         "/api/stellorbit/runtime/rules/status-reports",
         "/api/stellorbit/runtime/rules/heartbeats",
-        protobufCompatibility(),
-        directory,
         OffsetDateTime.now());
   }
 
@@ -202,7 +185,6 @@ public class RuntimeRuleDeliveryUseCase {
   public ClientHeartbeatResponse heartbeat(ClientHeartbeatRequest request) {
     validateRuntimeFormat(request.runtimeFormat());
     validateProtocol(request.protocolVersion(), request.snapshotSchemaVersion());
-    RuntimeNodeDirectoryResponse directory = runtimeNodeDirectory.currentDirectory();
     ClientRuntimeSessionEntity session =
         upsertSession(
             request.instanceSpaceId(),
@@ -217,8 +199,7 @@ public class RuntimeRuleDeliveryUseCase {
             request.clientAddress(),
             request.zone(),
             request.labels(),
-            request.metadata(),
-            directory.ringVersion());
+            request.metadata());
     Long latestReleaseVersion =
         latestReleaseVersion(
             request.instanceSpaceId(),
@@ -233,14 +214,12 @@ public class RuntimeRuleDeliveryUseCase {
         OffsetDateTime.now(),
         HEARTBEAT_TTL_MILLIS,
         latestReleaseVersion,
-        needRefresh,
-        directory);
+        needRefresh);
   }
 
   /** 查询当前应用的客户端实例视图。 */
   @Transactional(readOnly = true)
   public ClientInstanceViewResponse instanceView(UUID instanceSpaceId, UUID applicationId) {
-    RuntimeNodeDirectoryResponse directory = runtimeNodeDirectory.currentDirectory();
     OffsetDateTime now = OffsetDateTime.now();
     List<ClientRuntimeInstanceResponse> instances =
         sessionRepository
@@ -249,8 +228,7 @@ public class RuntimeRuleDeliveryUseCase {
             .stream()
             .map(session -> toInstanceResponse(session, now))
             .toList();
-    return new ClientInstanceViewResponse(
-        instanceSpaceId, applicationId, now, directory, instances);
+    return new ClientInstanceViewResponse(instanceSpaceId, applicationId, now, instances);
   }
 
   public String protocolVersion() {
@@ -274,8 +252,7 @@ public class RuntimeRuleDeliveryUseCase {
       String clientAddress,
       String zone,
       Map<String, Object> labels,
-      Map<String, Object> metadata,
-      String ringVersion) {
+      Map<String, Object> metadata) {
     ClientRuntimeSessionEntity entity =
         sessionRepository
             .findByInstanceSpaceIdAndApplicationIdAndClientId(
@@ -294,7 +271,6 @@ public class RuntimeRuleDeliveryUseCase {
     entity.setZone(zone);
     entity.setLabels(labels == null ? new LinkedHashMap<>() : labels);
     entity.setMetadata(metadata == null ? new LinkedHashMap<>() : metadata);
-    entity.setRateLimitRingVersion(ringVersion);
     entity.setSessionStatus("ONLINE");
     entity.setLastHeartbeatAt(OffsetDateTime.now());
     return sessionRepository.save(entity);
@@ -315,7 +291,6 @@ public class RuntimeRuleDeliveryUseCase {
       Boolean changed,
       Boolean grayMatched,
       List<ReleaseItemEntity> items) {
-    RuntimeNodeDirectoryResponse directory = runtimeNodeDirectory.currentDirectory();
     String deliveryFormat = compatibleDeliveryFormat(requestedRuntimeFormat, release);
     return new RuntimeRuleSnapshotResponse(
         release.getId(),
@@ -330,12 +305,8 @@ public class RuntimeRuleDeliveryUseCase {
         release.getChecksum(),
         release.getPublishedAt(),
         OffsetDateTime.now(),
-        "JSON".equals(deliveryFormat) ? release.getReleaseSnapshotJson() : null,
-        "PROTOBUF".equals(deliveryFormat)
-            ? encodeBytes(release.getReleaseSnapshotBytes(), release.getReleaseSnapshotJson())
-            : null,
-        items.stream().map(item -> toRuleResponse(item, deliveryFormat)).toList(),
-        directory);
+        release.getReleaseSnapshotJson(),
+        items.stream().map(item -> toRuleResponse(item, deliveryFormat)).toList());
   }
 
   private RuntimeSnapshotRuleResponse toRuleResponse(
@@ -348,10 +319,7 @@ public class RuntimeRuleDeliveryUseCase {
         item.getDraftVersion(),
         item.getPriority(),
         item.getChecksum(),
-        "JSON".equals(deliveryFormat) ? item.getRuntimeSnapshotJson() : null,
-        "PROTOBUF".equals(deliveryFormat)
-            ? encodeBytes(item.getRuntimeSnapshotBytes(), item.getRuntimeSnapshotJson())
-            : null);
+        item.getRuntimeSnapshotJson());
   }
 
   private RuntimeRuleSnapshotResponse emptySnapshot(
@@ -370,24 +338,13 @@ public class RuntimeRuleDeliveryUseCase {
         null,
         OffsetDateTime.now(),
         null,
-        null,
-        List.of(),
-        runtimeNodeDirectory.currentDirectory());
+        List.of());
   }
 
   private String compatibleDeliveryFormat(
       String requestedRuntimeFormat, RuleReleaseEntity release) {
-    String releaseFormat = normalizeFormat(release.getRuntimeFormat());
-    if (releaseFormat.equals(requestedRuntimeFormat)) {
-      return requestedRuntimeFormat;
-    }
-    if ("JSON".equals(requestedRuntimeFormat) && release.getReleaseSnapshotJson() != null) {
-      return "JSON";
-    }
-    if ("PROTOBUF".equals(requestedRuntimeFormat) && release.getReleaseSnapshotBytes() != null) {
-      return "PROTOBUF";
-    }
-    return release.getReleaseSnapshotJson() != null ? "JSON" : "PROTOBUF";
+    normalizeFormat(release.getRuntimeFormat());
+    return requestedRuntimeFormat;
   }
 
   private boolean grayMatched(
@@ -435,14 +392,14 @@ public class RuntimeRuleDeliveryUseCase {
     if (acceptedRuntimeFormats == null || acceptedRuntimeFormats.isEmpty()) {
       return "JSON";
     }
-    List<String> normalized = acceptedRuntimeFormats.stream().map(this::normalizeFormat).toList();
-    if (normalized.contains("PROTOBUF")) {
-      return "PROTOBUF";
-    }
-    if (normalized.contains("JSON")) {
+    boolean acceptsJson =
+        acceptedRuntimeFormats.stream()
+            .map(value -> value == null ? "" : value.trim().toUpperCase(Locale.ROOT))
+            .anyMatch("JSON"::equals);
+    if (acceptsJson) {
       return "JSON";
     }
-    throw new InvalidRuleRequestException("客户端不支持JSON或PROTOBUF运行时快照格式");
+    throw new InvalidRuleRequestException("客户端不支持JSON运行时快照格式");
   }
 
   private boolean supportsProtocol(List<String> supportedProtocolVersions) {
@@ -491,8 +448,8 @@ public class RuntimeRuleDeliveryUseCase {
 
   private String normalizeFormat(String value) {
     String normalized = value == null ? "" : value.trim().toUpperCase(Locale.ROOT);
-    if (!List.of("JSON", "PROTOBUF").contains(normalized)) {
-      throw new InvalidRuleRequestException("运行时快照格式只支持JSON或PROTOBUF");
+    if (!"JSON".equals(normalized)) {
+      throw new InvalidRuleRequestException("运行时快照格式只支持JSON");
     }
     return normalized;
   }
@@ -507,20 +464,6 @@ public class RuntimeRuleDeliveryUseCase {
       throw new InvalidRuleRequestException(statusType + "状态不合法: " + value);
     }
     return normalized;
-  }
-
-  private String encodeBytes(byte[] bytes, Map<String, Object> jsonFallback) {
-    byte[] payload = bytes != null ? bytes : jsonFallbackBytes(jsonFallback);
-    return Base64.getEncoder().encodeToString(payload);
-  }
-
-  private byte[] jsonFallbackBytes(Map<String, Object> jsonFallback) {
-    try {
-      return objectMapper.writeValueAsBytes(jsonFallback == null ? Map.of() : jsonFallback);
-    } catch (JsonProcessingException exception) {
-      return String.valueOf(jsonFallback == null ? Map.of() : jsonFallback)
-          .getBytes(StandardCharsets.UTF_8);
-    }
   }
 
   private ClientRuntimeInstanceResponse toInstanceResponse(
@@ -541,20 +484,8 @@ public class RuntimeRuleDeliveryUseCase {
         session.getClientAddress(),
         session.getZone(),
         session.getLabels(),
-        session.getRateLimitRingVersion(),
         status,
         session.getFirstSeenAt(),
         session.getLastHeartbeatAt());
-  }
-
-  private Map<String, Object> protobufCompatibility() {
-    Map<String, Object> compatibility = new LinkedHashMap<>();
-    compatibility.put("jsonCanonical", Boolean.TRUE);
-    compatibility.put("unknownFields", "IGNORE");
-    compatibility.put("fieldNumberPolicy", "RESERVED_ON_DELETE");
-    compatibility.put("enumPolicy", "APPEND_ONLY");
-    compatibility.put("bytesEncoding", "BASE64");
-    compatibility.put("schemaRegistry", SNAPSHOT_SCHEMA_VERSION);
-    return compatibility;
   }
 }

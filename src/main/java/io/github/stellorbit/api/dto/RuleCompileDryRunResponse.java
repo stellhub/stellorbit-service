@@ -16,7 +16,6 @@ public record RuleCompileDryRunResponse(
     String checksum,
     Map<String, Object> normalizedSnapshotJson,
     String jsonContent,
-    String protobufContentBase64,
     List<String> errors,
     List<String> warnings,
     List<String> explain) {}

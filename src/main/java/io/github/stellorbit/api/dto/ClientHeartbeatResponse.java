@@ -8,5 +8,4 @@ public record ClientHeartbeatResponse(
     OffsetDateTime serverTime,
     Long heartbeatTtlMillis,
     Long latestReleaseVersion,
-    Boolean needSnapshotRefresh,
-    RuntimeNodeDirectoryResponse rateLimitNodeDirectory) {}
+    Boolean needSnapshotRefresh) {}

@@ -6,7 +6,6 @@ import io.github.stellorbit.infrastructure.persistence.entity.ApplicationEntity;
 import io.github.stellorbit.infrastructure.persistence.entity.AuthRuleCertificateEntity;
 import io.github.stellorbit.infrastructure.persistence.entity.GovernanceRuleEntity;
 import io.github.stellorbit.infrastructure.persistence.entity.MtlsCertificateEntity;
-import io.github.stellorbit.infrastructure.persistence.entity.RateLimitQuotaPolicyEntity;
 import io.github.stellorbit.infrastructure.persistence.entity.RateLimitRuleEntity;
 import io.github.stellorbit.infrastructure.persistence.entity.RuleValidationEntity;
 import io.github.stellorbit.infrastructure.persistence.repository.ApplicationRepository;
@@ -15,7 +14,6 @@ import io.github.stellorbit.infrastructure.persistence.repository.AuthRuleCertif
 import io.github.stellorbit.infrastructure.persistence.repository.BreakerRuleRepository;
 import io.github.stellorbit.infrastructure.persistence.repository.GovernanceRuleRepository;
 import io.github.stellorbit.infrastructure.persistence.repository.MtlsCertificateRepository;
-import io.github.stellorbit.infrastructure.persistence.repository.RateLimitQuotaPolicyRepository;
 import io.github.stellorbit.infrastructure.persistence.repository.RateLimitRuleRepository;
 import io.github.stellorbit.infrastructure.persistence.repository.RouteRuleRepository;
 import io.github.stellorbit.infrastructure.persistence.repository.RuleValidationRepository;
@@ -36,7 +34,6 @@ import org.springframework.transaction.annotation.Transactional;
 public class ValidateGovernanceRuleUseCase {
 
   private static final Set<String> RULE_TYPES = Set.of("ROUTE", "BREAKER", "RATE_LIMIT", "AUTH");
-  private static final Set<String> RUNTIME_FORMATS = Set.of("JSON", "PROTOBUF");
 
   private final GovernanceRuleRepository governanceRuleRepository;
   private final ApplicationRepository applicationRepository;
@@ -46,7 +43,6 @@ public class ValidateGovernanceRuleUseCase {
   private final AuthPolicyRuleRepository authPolicyRuleRepository;
   private final AuthRuleCertificateRepository authRuleCertificateRepository;
   private final MtlsCertificateRepository mtlsCertificateRepository;
-  private final RateLimitQuotaPolicyRepository rateLimitQuotaPolicyRepository;
   private final RuleValidationRepository ruleValidationRepository;
   private final GovernanceRuleContentCompiler governanceRuleContentCompiler;
 
@@ -59,7 +55,6 @@ public class ValidateGovernanceRuleUseCase {
       AuthPolicyRuleRepository authPolicyRuleRepository,
       AuthRuleCertificateRepository authRuleCertificateRepository,
       MtlsCertificateRepository mtlsCertificateRepository,
-      RateLimitQuotaPolicyRepository rateLimitQuotaPolicyRepository,
       RuleValidationRepository ruleValidationRepository,
       GovernanceRuleContentCompiler governanceRuleContentCompiler) {
     this.governanceRuleRepository = governanceRuleRepository;
@@ -70,7 +65,6 @@ public class ValidateGovernanceRuleUseCase {
     this.authPolicyRuleRepository = authPolicyRuleRepository;
     this.authRuleCertificateRepository = authRuleCertificateRepository;
     this.mtlsCertificateRepository = mtlsCertificateRepository;
-    this.rateLimitQuotaPolicyRepository = rateLimitQuotaPolicyRepository;
     this.ruleValidationRepository = ruleValidationRepository;
     this.governanceRuleContentCompiler = governanceRuleContentCompiler;
   }
@@ -141,8 +135,8 @@ public class ValidateGovernanceRuleUseCase {
     if (!"CUE".equals(rule.getSourceFormat())) {
       errors.add("sourceFormat必须是CUE");
     }
-    if (rule.getRuntimeFormat() == null || !RUNTIME_FORMATS.contains(rule.getRuntimeFormat())) {
-      errors.add("runtimeFormat必须是JSON或PROTOBUF");
+    if (rule.getRuntimeFormat() == null || !"JSON".equals(rule.getRuntimeFormat())) {
+      errors.add("runtimeFormat只支持JSON");
     }
     if (rule.getPriority() == null || rule.getPriority() < 0) {
       errors.add("规则优先级不能小于0");
@@ -180,17 +174,9 @@ public class ValidateGovernanceRuleUseCase {
       errors.add("限流规则明细不存在");
       return;
     }
-    if (!"GLOBAL_QUOTA".equals(detailRule.getEnforcementMode())) {
-      warnings.add("限流规则不是GLOBAL_QUOTA模式，不需要分布式配额策略");
-      return;
+    if ("GLOBAL_QUOTA".equals(detailRule.getEnforcementMode())) {
+      warnings.add("GLOBAL_QUOTA运行时配额由外部分布式限流服务承载，本项目仅发布限流规则");
     }
-    RateLimitQuotaPolicyEntity quotaPolicy =
-        rateLimitQuotaPolicyRepository.findByRateLimitRuleId(ruleId).orElse(null);
-    if (quotaPolicy == null) {
-      errors.add("GLOBAL_QUOTA限流规则必须配置配额策略");
-      return;
-    }
-    validateQuotaPolicyCompleteness(quotaPolicy, errors);
   }
 
   private void validateAuthRule(UUID ruleId, List<String> errors, List<String> warnings) {
@@ -213,24 +199,6 @@ public class ValidateGovernanceRuleUseCase {
         continue;
       }
       validateCertificate(certificate, errors);
-    }
-  }
-
-  private void validateQuotaPolicyCompleteness(
-      RateLimitQuotaPolicyEntity quotaPolicy, List<String> errors) {
-    requireText(quotaPolicy.getAllocationAlgorithm(), "配额分配算法不能为空", errors);
-    requirePositive(quotaPolicy.getAssignmentTtlMillis(), "配额租约TTL必须大于0", errors);
-    requirePositive(quotaPolicy.getReportIntervalMillis(), "用量上报间隔必须大于0", errors);
-    requirePositive(quotaPolicy.getRebalanceIntervalMillis(), "配额重平衡间隔必须大于0", errors);
-    if (quotaPolicy.getReportIntervalMillis() != null
-        && quotaPolicy.getAssignmentTtlMillis() != null
-        && quotaPolicy.getReportIntervalMillis() > quotaPolicy.getAssignmentTtlMillis()) {
-      errors.add("用量上报间隔不能大于配额租约TTL");
-    }
-    if (quotaPolicy.getReportIntervalMillis() != null
-        && quotaPolicy.getRebalanceIntervalMillis() != null
-        && quotaPolicy.getReportIntervalMillis() > quotaPolicy.getRebalanceIntervalMillis()) {
-      errors.add("用量上报间隔不能大于配额重平衡间隔");
     }
   }
 
@@ -260,12 +228,6 @@ public class ValidateGovernanceRuleUseCase {
 
   private void requireText(String value, String message, List<String> errors) {
     if (value == null || value.isBlank()) {
-      errors.add(message);
-    }
-  }
-
-  private void requirePositive(Long value, String message, List<String> errors) {
-    if (value == null || value <= 0) {
       errors.add(message);
     }
   }

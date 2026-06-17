@@ -16,7 +16,6 @@ public record ClientRuntimeInstanceResponse(
     String clientAddress,
     String zone,
     Map<String, Object> labels,
-    String rateLimitRingVersion,
     String sessionStatus,
     OffsetDateTime firstSeenAt,
     OffsetDateTime lastHeartbeatAt) {}

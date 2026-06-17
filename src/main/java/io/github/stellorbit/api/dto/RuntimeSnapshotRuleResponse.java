@@ -11,5 +11,4 @@ public record RuntimeSnapshotRuleResponse(
     Long draftVersion,
     Integer priority,
     String checksum,
-    Map<String, Object> snapshotJson,
-    String snapshotBytesBase64) {}
+    Map<String, Object> snapshotJson) {}

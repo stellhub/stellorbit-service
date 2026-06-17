@@ -8,5 +8,4 @@ public record ClientInstanceViewResponse(
     UUID instanceSpaceId,
     UUID applicationId,
     OffsetDateTime generatedAt,
-    RuntimeNodeDirectoryResponse rateLimitNodeDirectory,
     List<ClientRuntimeInstanceResponse> instances) {}

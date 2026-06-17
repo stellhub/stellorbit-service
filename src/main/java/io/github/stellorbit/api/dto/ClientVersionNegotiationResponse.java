@@ -1,7 +1,6 @@
 package io.github.stellorbit.api.dto;
 
 import java.time.OffsetDateTime;
-import java.util.Map;
 
 public record ClientVersionNegotiationResponse(
     String protocolVersion,
@@ -13,6 +12,4 @@ public record ClientVersionNegotiationResponse(
     String ackEndpoint,
     String statusReportEndpoint,
     String heartbeatEndpoint,
-    Map<String, Object> protobufCompatibility,
-    RuntimeNodeDirectoryResponse rateLimitNodeDirectory,
     OffsetDateTime negotiatedAt) {}

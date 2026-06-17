@@ -62,9 +62,6 @@ public class GovernanceRuleEntity implements Identifiable {
   @Column(name = "runtime_snapshot_json", columnDefinition = "jsonb")
   private Map<String, Object> runtimeSnapshotJson;
 
-  @Column(name = "runtime_snapshot_bytes")
-  private byte[] runtimeSnapshotBytes;
-
   @Column(length = 128)
   private String checksum;
 

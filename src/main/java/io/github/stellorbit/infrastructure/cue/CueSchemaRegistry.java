@@ -70,7 +70,7 @@ public class CueSchemaRegistry {
       targetService: #NonEmptyString
       status: *"ACTIVE" | "ACTIVE" | "DISABLED"
       sourceFormat: *"CUE" | "CUE"
-      runtimeFormat: *"JSON" | "JSON" | "PROTOBUF"
+      runtimeFormat: *"JSON" | "JSON"
       priority: *1000 | int & >=0
       draftVersion: int & >0
       enabled: *true | bool

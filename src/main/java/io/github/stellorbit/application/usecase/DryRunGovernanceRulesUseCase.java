@@ -18,18 +18,14 @@ import io.github.stellorbit.api.error.InvalidRuleRequestException;
 import io.github.stellorbit.api.error.ResourceNotFoundException;
 import io.github.stellorbit.api.security.ControlPlaneSecurityContextHolder;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class DryRunGovernanceRulesUseCase {
-
-  private static final Set<String> RUNTIME_FORMATS = Set.of("JSON", "PROTOBUF");
 
   private final GovernanceRuleRepository governanceRuleRepository;
   private final ApplicationRepository applicationRepository;
@@ -167,7 +163,6 @@ public class DryRunGovernanceRulesUseCase {
         compiledRule.checksum(),
         compiledRule.contentModel(),
         compiledRule.content(),
-        Base64.getEncoder().encodeToString(compiledRule.protobufPayload()),
         errors,
         compiledRule.warnings(),
         compiledRule.explain());
@@ -187,7 +182,6 @@ public class DryRunGovernanceRulesUseCase {
         null,
         Map.of(),
         null,
-        null,
         List.of(error),
         List.of(),
         List.of("CUE compilation failed before normalized snapshot generation"));
@@ -198,8 +192,8 @@ public class DryRunGovernanceRulesUseCase {
         runtimeFormat == null || runtimeFormat.isBlank()
             ? "JSON"
             : runtimeFormat.trim().toUpperCase();
-    if (!RUNTIME_FORMATS.contains(normalized)) {
-      throw new InvalidRuleRequestException("runtimeFormat必须是JSON或PROTOBUF");
+    if (!"JSON".equals(normalized)) {
+      throw new InvalidRuleRequestException("runtimeFormat只支持JSON");
     }
     return normalized;
   }

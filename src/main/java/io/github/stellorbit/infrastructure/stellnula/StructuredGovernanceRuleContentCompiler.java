@@ -3,8 +3,6 @@ package io.github.stellorbit.infrastructure.stellnula;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
-import com.google.protobuf.Struct;
-import com.google.protobuf.util.JsonFormat;
 import io.github.stellorbit.application.port.CompiledGovernanceRule;
 import io.github.stellorbit.application.port.GovernanceRuleContentCompiler;
 import io.github.stellorbit.infrastructure.cue.CueCompilationResult;
@@ -92,7 +90,6 @@ public class StructuredGovernanceRuleContentCompiler implements GovernanceRuleCo
         content,
         sha256(content),
         normalizedModel,
-        toProtobufBytes(content),
         cueResult.warnings(),
         cueResult.explain());
   }
@@ -257,16 +254,6 @@ public class StructuredGovernanceRuleContentCompiler implements GovernanceRuleCo
       return canonicalObjectMapper.writeValueAsString(value);
     } catch (JsonProcessingException exception) {
       throw new InvalidRuleRequestException("治理规则内容序列化失败: " + exception.getMessage());
-    }
-  }
-
-  private byte[] toProtobufBytes(String content) {
-    try {
-      Struct.Builder builder = Struct.newBuilder();
-      JsonFormat.parser().merge(content, builder);
-      return builder.build().toByteArray();
-    } catch (Exception exception) {
-      throw new InvalidRuleRequestException("治理规则Protobuf转换失败: " + exception.getMessage());
     }
   }
 

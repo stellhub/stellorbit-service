@@ -74,9 +74,6 @@ public class ClientRuntimeSessionEntity implements Identifiable {
   @Column(nullable = false, columnDefinition = "jsonb")
   private Map<String, Object> metadata = new LinkedHashMap<>();
 
-  @Column(name = "rate_limit_ring_version", length = 64)
-  private String rateLimitRingVersion;
-
   @Column(name = "session_status", nullable = false, length = 32)
   private String sessionStatus = "ONLINE";
 

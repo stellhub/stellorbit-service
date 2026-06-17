@@ -28,21 +28,6 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION fill_release_context()
-RETURNS TRIGGER
-LANGUAGE plpgsql
-AS $$
-BEGIN
-    IF NEW.release_id IS NOT NULL THEN
-        SELECT tenant_id, instance_space_id, application_id
-        INTO NEW.tenant_id, NEW.instance_space_id, NEW.application_id
-        FROM rule_releases
-        WHERE id = NEW.release_id;
-    END IF;
-    RETURN NEW;
-END;
-$$;
-
 CREATE TABLE instance_spaces (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id VARCHAR(120) NOT NULL,
@@ -104,7 +89,6 @@ CREATE TABLE governance_rules (
     runtime_format VARCHAR(32) NOT NULL DEFAULT 'JSON',
     cue_source TEXT NOT NULL,
     runtime_snapshot_json JSONB,
-    runtime_snapshot_bytes BYTEA,
     checksum VARCHAR(128),
     priority INTEGER NOT NULL DEFAULT 1000,
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
@@ -124,13 +108,9 @@ CREATE TABLE governance_rules (
     CONSTRAINT fk_governance_rules_tenant_application FOREIGN KEY (tenant_id, application_id) REFERENCES applications (tenant_id, id) ON DELETE RESTRICT,
     CONSTRAINT ck_governance_rules_type CHECK (rule_type IN ('ROUTE', 'BREAKER', 'RATE_LIMIT', 'AUTH')),
     CONSTRAINT ck_governance_rules_source_format CHECK (source_format = 'CUE'),
-    CONSTRAINT ck_governance_rules_runtime_format CHECK (runtime_format IN ('JSON', 'PROTOBUF')),
+    CONSTRAINT ck_governance_rules_runtime_format CHECK (runtime_format = 'JSON'),
     CONSTRAINT ck_governance_rules_status CHECK (status IN ('DRAFT', 'VALIDATED', 'PUBLISHED', 'DISABLED', 'ARCHIVED')),
-    CONSTRAINT ck_governance_rules_tags_array CHECK (jsonb_typeof(tags) = 'array'),
-    CONSTRAINT ck_governance_rules_runtime_snapshot CHECK (
-        (runtime_format = 'JSON' AND runtime_snapshot_bytes IS NULL)
-        OR (runtime_format = 'PROTOBUF' AND runtime_snapshot_json IS NULL)
-    )
+    CONSTRAINT ck_governance_rules_tags_array CHECK (jsonb_typeof(tags) = 'array')
 );
 
 COMMENT ON TABLE governance_rules IS 'Common rule table for lifecycle, CUE source and runtime snapshot metadata.';
@@ -177,9 +157,9 @@ CREATE TABLE route_rules (
     locality_policy JSONB NOT NULL DEFAULT '{}'::JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT ck_route_rules_type CHECK (route_type IN ('HTTP', 'GRPC', 'TCP', 'TLS', 'TRAFFIC_SPLIT', 'CANARY', 'HEADER', 'QUERY', 'COOKIE', 'LOCALITY', 'FAILOVER', 'MIRROR', 'REDIRECT', 'DIRECT_RESPONSE', 'EGRESS')),
+    CONSTRAINT ck_route_rules_type CHECK (route_type IN ('HTTP', 'TCP', 'TLS', 'TRAFFIC_SPLIT', 'CANARY', 'HEADER', 'QUERY', 'COOKIE', 'LOCALITY', 'FAILOVER', 'MIRROR', 'REDIRECT', 'DIRECT_RESPONSE', 'EGRESS')),
     CONSTRAINT ck_route_rules_direction CHECK (traffic_direction IN ('NORTH_SOUTH', 'EAST_WEST', 'EGRESS')),
-    CONSTRAINT ck_route_rules_protocol CHECK (protocol IN ('HTTP', 'HTTP2', 'GRPC', 'TCP', 'TLS')),
+    CONSTRAINT ck_route_rules_protocol CHECK (protocol IN ('HTTP', 'HTTP2', 'TCP', 'TLS')),
     CONSTRAINT ck_route_rules_gateways_array CHECK (jsonb_typeof(gateways) = 'array'),
     CONSTRAINT ck_route_rules_hosts_array CHECK (jsonb_typeof(hosts) = 'array'),
     CONSTRAINT ck_route_rules_source_object CHECK (jsonb_typeof(source_selector) = 'object'),
@@ -211,7 +191,7 @@ CREATE TABLE breaker_rules (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT ck_breaker_rules_type CHECK (breaker_type IN ('CONNECTION_POOL', 'CONSECUTIVE_ERROR', 'ERROR_RATE', 'SLOW_CALL_RATE', 'EXCEPTION_CLASSIFICATION', 'OUTLIER_DETECTION', 'HALF_OPEN_PROBE', 'RETRY_BUDGET', 'BULKHEAD')),
-    CONSTRAINT ck_breaker_rules_protocol CHECK (protocol IN ('HTTP', 'HTTP2', 'GRPC', 'TCP')),
+    CONSTRAINT ck_breaker_rules_protocol CHECK (protocol IN ('HTTP', 'HTTP2', 'TCP')),
     CONSTRAINT ck_breaker_rules_window_type CHECK (window_type IS NULL OR window_type IN ('COUNT_BASED', 'TIME_BASED')),
     CONSTRAINT ck_breaker_rules_window_size CHECK (window_size IS NULL OR window_size > 0),
     CONSTRAINT ck_breaker_rules_minimum_calls CHECK (minimum_calls IS NULL OR minimum_calls > 0),
@@ -251,36 +231,6 @@ CREATE TABLE rate_limit_rules (
 );
 
 COMMENT ON TABLE rate_limit_rules IS 'Typed rate limit rules including local, global, quota lease and model application limits.';
-
-CREATE TABLE rate_limit_quota_policies (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    rate_limit_rule_id UUID NOT NULL REFERENCES rate_limit_rules (governance_rule_id) ON DELETE CASCADE,
-    allocation_algorithm VARCHAR(48) NOT NULL,
-    assignment_ttl_millis BIGINT NOT NULL,
-    report_interval_millis BIGINT NOT NULL,
-    rebalance_interval_millis BIGINT NOT NULL,
-    max_overdraft_ratio NUMERIC(7, 4) NOT NULL DEFAULT 0,
-    hotspot_shard_count INTEGER NOT NULL DEFAULT 1,
-    min_assignment_quota BIGINT NOT NULL DEFAULT 0,
-    max_assignment_quota BIGINT,
-    failover_strategy VARCHAR(48) NOT NULL DEFAULT 'LAST_ASSIGNMENT',
-    algorithm_config JSONB NOT NULL DEFAULT '{}'::JSONB,
-    created_by VARCHAR(120) NOT NULL,
-    updated_by VARCHAR(120) NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT uk_rate_limit_quota_policies_rule UNIQUE (rate_limit_rule_id),
-    CONSTRAINT ck_rate_limit_quota_policies_algorithm CHECK (allocation_algorithm IN ('EQUAL_SPLIT', 'WEIGHTED_SPLIT', 'DEMAND_AWARE', 'HOTSPOT_AWARE', 'BORROWING', 'MANUAL')),
-    CONSTRAINT ck_rate_limit_quota_policies_ttl CHECK (assignment_ttl_millis > 0),
-    CONSTRAINT ck_rate_limit_quota_policies_report CHECK (report_interval_millis > 0),
-    CONSTRAINT ck_rate_limit_quota_policies_rebalance CHECK (rebalance_interval_millis > 0),
-    CONSTRAINT ck_rate_limit_quota_policies_overdraft CHECK (max_overdraft_ratio >= 0),
-    CONSTRAINT ck_rate_limit_quota_policies_shards CHECK (hotspot_shard_count > 0),
-    CONSTRAINT ck_rate_limit_quota_policies_failover CHECK (failover_strategy IN ('FAIL_OPEN', 'FAIL_CLOSED', 'LOCAL_FALLBACK', 'LAST_ASSIGNMENT')),
-    CONSTRAINT ck_rate_limit_quota_policies_config_object CHECK (jsonb_typeof(algorithm_config) = 'object')
-);
-
-COMMENT ON TABLE rate_limit_quota_policies IS 'Quota allocation algorithms used by the distributed rate limit server.';
 
 CREATE TABLE auth_policy_rules (
     governance_rule_id UUID PRIMARY KEY REFERENCES governance_rules (id) ON DELETE CASCADE,
@@ -407,7 +357,6 @@ CREATE TABLE rule_releases (
     compatibility_messages JSONB NOT NULL DEFAULT '[]'::JSONB,
     approval_status VARCHAR(32) NOT NULL DEFAULT 'NOT_REQUIRED',
     release_snapshot_json JSONB,
-    release_snapshot_bytes BYTEA,
     checksum VARCHAR(128) NOT NULL,
     rollback_from_release_id UUID REFERENCES rule_releases (id) ON DELETE RESTRICT,
     release_note TEXT,
@@ -433,14 +382,13 @@ CREATE TABLE rule_releases (
     CONSTRAINT ck_rule_releases_compatibility CHECK (compatibility_status IN ('COMPATIBLE', 'INCOMPATIBLE', 'UNKNOWN')),
     CONSTRAINT ck_rule_releases_compatibility_messages_array CHECK (jsonb_typeof(compatibility_messages) = 'array'),
     CONSTRAINT ck_rule_releases_source_format CHECK (source_format = 'CUE'),
-    CONSTRAINT ck_rule_releases_runtime_format CHECK (runtime_format IN ('JSON', 'PROTOBUF')),
+    CONSTRAINT ck_rule_releases_runtime_format CHECK (runtime_format = 'JSON'),
     CONSTRAINT ck_rule_releases_retry CHECK (retry_count >= 0 AND max_retry_count >= 0),
     CONSTRAINT ck_rule_releases_failure_details_array CHECK (jsonb_typeof(failure_details) = 'array'),
     CONSTRAINT ck_rule_releases_recovery_status CHECK (recovery_status IN ('NONE', 'MANUAL_RECOVERED')),
     CONSTRAINT ck_rule_releases_snapshot CHECK (
-        (release_status IN ('CREATED', 'VALIDATING', 'APPROVAL_PENDING', 'APPROVED', 'REJECTED', 'CANCELED', 'FAILED') AND release_snapshot_json IS NULL AND release_snapshot_bytes IS NULL)
-        OR (runtime_format = 'JSON' AND release_snapshot_json IS NOT NULL AND release_snapshot_bytes IS NULL)
-        OR (runtime_format = 'PROTOBUF' AND release_snapshot_json IS NULL AND release_snapshot_bytes IS NOT NULL)
+        (release_status IN ('CREATED', 'VALIDATING', 'APPROVAL_PENDING', 'APPROVED', 'REJECTED', 'CANCELED', 'FAILED') AND release_snapshot_json IS NULL)
+        OR (runtime_format = 'JSON' AND release_snapshot_json IS NOT NULL)
     )
 );
 
@@ -467,14 +415,13 @@ CREATE TABLE release_items (
     priority INTEGER NOT NULL,
     cue_source TEXT NOT NULL,
     runtime_snapshot_json JSONB,
-    runtime_snapshot_bytes BYTEA,
     checksum VARCHAR(128) NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT uk_release_items_rule UNIQUE (release_id, rule_id),
     CONSTRAINT ck_release_items_type CHECK (rule_type IN ('ROUTE', 'BREAKER', 'RATE_LIMIT', 'AUTH')),
     CONSTRAINT ck_release_items_compatibility CHECK (compatibility_status IN ('COMPATIBLE', 'INCOMPATIBLE', 'UNKNOWN')),
     CONSTRAINT ck_release_items_compatibility_messages_array CHECK (jsonb_typeof(compatibility_messages) = 'array'),
-    CONSTRAINT ck_release_items_snapshot CHECK (runtime_snapshot_json IS NOT NULL OR runtime_snapshot_bytes IS NOT NULL)
+    CONSTRAINT ck_release_items_snapshot CHECK (runtime_snapshot_json IS NOT NULL)
 );
 
 COMMENT ON TABLE release_items IS 'Rule-level immutable snapshots included in a release.';
@@ -568,7 +515,6 @@ CREATE TABLE stellnula_publish_records (
     content_type VARCHAR(80) NOT NULL DEFAULT 'application/json',
     runtime_format VARCHAR(32) NOT NULL DEFAULT 'JSON',
     payload_text TEXT,
-    payload_bytes BYTEA,
     payload_metadata JSONB NOT NULL DEFAULT '{}'::JSONB,
     checksum VARCHAR(128) NOT NULL,
     target_version VARCHAR(120),
@@ -591,15 +537,12 @@ CREATE TABLE stellnula_publish_records (
     CONSTRAINT fk_stellnula_publish_records_tenant_space FOREIGN KEY (tenant_id, instance_space_id) REFERENCES instance_spaces (tenant_id, id) ON DELETE RESTRICT,
     CONSTRAINT fk_stellnula_publish_records_tenant_application FOREIGN KEY (tenant_id, application_id) REFERENCES applications (tenant_id, id) ON DELETE RESTRICT,
     CONSTRAINT ck_stellnula_publish_records_kind CHECK (publish_kind IN ('RULE_SNAPSHOT', 'ROUTE_RULES', 'BREAKER_RULES', 'RATE_LIMIT_RULES', 'AUTH_RULES', 'MTLS_CERTIFICATE', 'JWKS', 'RATE_LIMIT_ASSIGNMENT')),
-    CONSTRAINT ck_stellnula_publish_records_runtime_format CHECK (runtime_format IN ('JSON', 'PROTOBUF')),
+    CONSTRAINT ck_stellnula_publish_records_runtime_format CHECK (runtime_format = 'JSON'),
     CONSTRAINT ck_stellnula_publish_records_status CHECK (publish_status IN ('PENDING', 'PUBLISHING', 'PUBLISHED', 'FAILED')),
     CONSTRAINT ck_stellnula_publish_records_retry CHECK (retry_count >= 0 AND max_retry_count >= 0),
     CONSTRAINT ck_stellnula_publish_records_payload_object CHECK (jsonb_typeof(payload_metadata) = 'object'),
     CONSTRAINT ck_stellnula_publish_records_failure_array CHECK (jsonb_typeof(failure_details) = 'array'),
-    CONSTRAINT ck_stellnula_publish_records_payload CHECK (
-        (runtime_format = 'JSON' AND payload_text IS NOT NULL AND payload_bytes IS NULL)
-        OR (runtime_format = 'PROTOBUF' AND payload_text IS NULL AND payload_bytes IS NOT NULL)
-    )
+    CONSTRAINT ck_stellnula_publish_records_payload CHECK (payload_text IS NOT NULL)
 );
 
 COMMENT ON TABLE stellnula_publish_records IS 'Records of rule snapshots, mTLS certificates and JWKS published to stellnula-service.';
@@ -619,14 +562,13 @@ CREATE TABLE client_runtime_sessions (
     zone VARCHAR(120),
     labels JSONB NOT NULL DEFAULT '{}'::JSONB,
     metadata JSONB NOT NULL DEFAULT '{}'::JSONB,
-    rate_limit_ring_version VARCHAR(64),
     session_status VARCHAR(32) NOT NULL DEFAULT 'ONLINE',
     first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     row_version BIGINT NOT NULL DEFAULT 0,
     CONSTRAINT uk_client_runtime_sessions_client UNIQUE (instance_space_id, application_id, client_id),
-    CONSTRAINT ck_client_runtime_sessions_format CHECK (runtime_format IN ('JSON', 'PROTOBUF')),
+    CONSTRAINT ck_client_runtime_sessions_format CHECK (runtime_format = 'JSON'),
     CONSTRAINT ck_client_runtime_sessions_status CHECK (session_status IN ('ONLINE', 'STALE', 'OFFLINE')),
     CONSTRAINT ck_client_runtime_sessions_labels_object CHECK (jsonb_typeof(labels) = 'object'),
     CONSTRAINT ck_client_runtime_sessions_metadata_object CHECK (jsonb_typeof(metadata) = 'object')
@@ -652,7 +594,7 @@ CREATE TABLE client_runtime_acks (
     applied_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT uk_client_runtime_acks_release_client UNIQUE (release_id, client_id),
-    CONSTRAINT ck_client_runtime_acks_format CHECK (runtime_format IN ('JSON', 'PROTOBUF')),
+    CONSTRAINT ck_client_runtime_acks_format CHECK (runtime_format = 'JSON'),
     CONSTRAINT ck_client_runtime_acks_status CHECK (ack_status IN ('RECEIVED', 'APPLIED', 'REJECTED', 'ROLLBACK_APPLIED', 'STALE'))
 );
 
@@ -676,7 +618,7 @@ CREATE TABLE client_runtime_status_reports (
     reported_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT pk_client_runtime_status_reports PRIMARY KEY (id, created_at),
-    CONSTRAINT ck_client_runtime_status_reports_format CHECK (runtime_format IN ('JSON', 'PROTOBUF')),
+    CONSTRAINT ck_client_runtime_status_reports_format CHECK (runtime_format = 'JSON'),
     CONSTRAINT ck_client_runtime_status_reports_status CHECK (effective_status IN ('APPLIED', 'PARTIAL_APPLIED', 'FAILED', 'ROLLING_BACK', 'ROLLED_BACK')),
     CONSTRAINT ck_client_runtime_status_reports_rules_array CHECK (jsonb_typeof(rule_statuses) = 'array'),
     CONSTRAINT ck_client_runtime_status_reports_errors_array CHECK (jsonb_typeof(error_details) = 'array')
@@ -744,146 +686,6 @@ CREATE TABLE publish_jobs (
 
 COMMENT ON TABLE publish_jobs IS 'Outbox jobs used by publish workers to asynchronously publish, reconcile and compensate Stellnula records.';
 
-CREATE TABLE rate_limit_quota_assignments (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id VARCHAR(120) NOT NULL,
-    instance_space_id UUID NOT NULL REFERENCES instance_spaces (id) ON DELETE CASCADE,
-    application_id UUID NOT NULL REFERENCES applications (id) ON DELETE CASCADE,
-    rate_limit_rule_id UUID NOT NULL REFERENCES rate_limit_rules (governance_rule_id) ON DELETE CASCADE,
-    quota_policy_id UUID NOT NULL REFERENCES rate_limit_quota_policies (id) ON DELETE CASCADE,
-    release_id UUID NOT NULL REFERENCES rule_releases (id) ON DELETE RESTRICT,
-    client_id VARCHAR(160) NOT NULL,
-    limit_key_hash VARCHAR(128) NOT NULL,
-    assigned_quota BIGINT NOT NULL,
-    used_quota BIGINT NOT NULL DEFAULT 0,
-    remaining_quota BIGINT NOT NULL,
-    lease_version BIGINT NOT NULL,
-    lease_status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
-    assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    expires_at TIMESTAMPTZ NOT NULL,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    row_version BIGINT NOT NULL DEFAULT 0,
-    CONSTRAINT uk_rate_limit_quota_assignments UNIQUE (rate_limit_rule_id, client_id, limit_key_hash, lease_version),
-    CONSTRAINT ck_rate_limit_quota_assignments_quota CHECK (assigned_quota >= 0),
-    CONSTRAINT ck_rate_limit_quota_assignments_used CHECK (used_quota >= 0),
-    CONSTRAINT ck_rate_limit_quota_assignments_remaining CHECK (remaining_quota >= 0),
-    CONSTRAINT ck_rate_limit_quota_assignments_status CHECK (lease_status IN ('ACTIVE', 'EXPIRED', 'REVOKED', 'REBALANCED')),
-    CONSTRAINT ck_rate_limit_quota_assignments_expiry CHECK (expires_at > assigned_at)
-);
-
-COMMENT ON TABLE rate_limit_quota_assignments IS 'Quota lease assignments issued to distributed rate limit clients.';
-
-CREATE TABLE rate_limit_usage_reports (
-    id UUID NOT NULL DEFAULT gen_random_uuid(),
-    assignment_id UUID REFERENCES rate_limit_quota_assignments (id) ON DELETE SET NULL,
-    tenant_id VARCHAR(120) NOT NULL,
-    instance_space_id UUID NOT NULL REFERENCES instance_spaces (id) ON DELETE CASCADE,
-    application_id UUID NOT NULL REFERENCES applications (id) ON DELETE CASCADE,
-    rate_limit_rule_id UUID NOT NULL REFERENCES rate_limit_rules (governance_rule_id) ON DELETE CASCADE,
-    release_id UUID NOT NULL REFERENCES rule_releases (id) ON DELETE RESTRICT,
-    client_id VARCHAR(160) NOT NULL,
-    limit_key_hash VARCHAR(128) NOT NULL,
-    reported_used BIGINT NOT NULL,
-    reported_allowed BIGINT NOT NULL DEFAULT 0,
-    reported_rejected BIGINT NOT NULL DEFAULT 0,
-    model_usage JSONB NOT NULL DEFAULT '{}'::JSONB,
-    report_window_start TIMESTAMPTZ NOT NULL,
-    report_window_end TIMESTAMPTZ NOT NULL,
-    reported_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT pk_rate_limit_usage_reports PRIMARY KEY (id, reported_at),
-    CONSTRAINT ck_rate_limit_usage_reports_used CHECK (reported_used >= 0),
-    CONSTRAINT ck_rate_limit_usage_reports_allowed CHECK (reported_allowed >= 0),
-    CONSTRAINT ck_rate_limit_usage_reports_rejected CHECK (reported_rejected >= 0),
-    CONSTRAINT ck_rate_limit_usage_reports_model_object CHECK (jsonb_typeof(model_usage) = 'object'),
-    CONSTRAINT ck_rate_limit_usage_reports_window CHECK (report_window_end > report_window_start)
-) PARTITION BY RANGE (reported_at);
-
-COMMENT ON TABLE rate_limit_usage_reports IS 'Periodic usage reports from clients for quota rebalance and model usage accounting.';
-
-CREATE TABLE rate_limit_usage_reports_default PARTITION OF rate_limit_usage_reports DEFAULT;
-
-CREATE TABLE rate_limit_buckets (
-    id UUID NOT NULL DEFAULT gen_random_uuid(),
-    tenant_id VARCHAR(120) NOT NULL,
-    instance_space_id UUID NOT NULL REFERENCES instance_spaces (id) ON DELETE RESTRICT,
-    application_id UUID NOT NULL REFERENCES applications (id) ON DELETE RESTRICT,
-    rate_limit_rule_id UUID NOT NULL REFERENCES rate_limit_rules (governance_rule_id) ON DELETE CASCADE,
-    release_id UUID NOT NULL REFERENCES rule_releases (id) ON DELETE RESTRICT,
-    limit_key_hash VARCHAR(128) NOT NULL,
-    limit_key TEXT NOT NULL,
-    window_strategy VARCHAR(48) NOT NULL,
-    window_start_at TIMESTAMPTZ NOT NULL,
-    window_end_at TIMESTAMPTZ NOT NULL,
-    quota BIGINT NOT NULL,
-    used_permits BIGINT NOT NULL DEFAULT 0,
-    remaining_permits BIGINT NOT NULL,
-    reset_at TIMESTAMPTZ NOT NULL,
-    expires_at TIMESTAMPTZ NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT pk_rate_limit_buckets PRIMARY KEY (id, window_start_at),
-    CONSTRAINT uk_rate_limit_buckets_window UNIQUE (rate_limit_rule_id, release_id, limit_key_hash, window_start_at),
-    CONSTRAINT ck_rate_limit_buckets_strategy CHECK (window_strategy IN ('TOKEN_BUCKET', 'LEAKY_BUCKET', 'FIXED_WINDOW', 'SLIDING_WINDOW', 'QUOTA_LEASE')),
-    CONSTRAINT ck_rate_limit_buckets_quota CHECK (quota >= 0),
-    CONSTRAINT ck_rate_limit_buckets_used CHECK (used_permits >= 0),
-    CONSTRAINT ck_rate_limit_buckets_remaining CHECK (remaining_permits >= 0),
-    CONSTRAINT ck_rate_limit_buckets_window_time CHECK (window_end_at > window_start_at),
-    CONSTRAINT ck_rate_limit_buckets_remaining_capacity CHECK (remaining_permits <= quota)
-) PARTITION BY RANGE (window_start_at);
-
-COMMENT ON TABLE rate_limit_buckets IS 'Server-side distributed rate limit bucket states for synchronous decisions.';
-
-CREATE TABLE rate_limit_buckets_default PARTITION OF rate_limit_buckets DEFAULT;
-
-CREATE TABLE rate_limit_decisions (
-    id UUID NOT NULL DEFAULT gen_random_uuid(),
-    bucket_id UUID,
-    assignment_id UUID REFERENCES rate_limit_quota_assignments (id) ON DELETE SET NULL,
-    tenant_id VARCHAR(120) NOT NULL,
-    instance_space_id UUID NOT NULL REFERENCES instance_spaces (id) ON DELETE RESTRICT,
-    application_id UUID NOT NULL REFERENCES applications (id) ON DELETE RESTRICT,
-    rate_limit_rule_id UUID NOT NULL REFERENCES rate_limit_rules (governance_rule_id) ON DELETE CASCADE,
-    release_id UUID NOT NULL REFERENCES rule_releases (id) ON DELETE RESTRICT,
-    request_id VARCHAR(160),
-    client_id VARCHAR(160),
-    limit_key_hash VARCHAR(128) NOT NULL,
-    requested_permits BIGINT NOT NULL DEFAULT 1,
-    model_request_units JSONB NOT NULL DEFAULT '{}'::JSONB,
-    allowed BOOLEAN NOT NULL,
-    remaining_permits BIGINT,
-    retry_after_millis BIGINT,
-    fallback_used BOOLEAN NOT NULL DEFAULT FALSE,
-    decision_reason VARCHAR(160),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    retention_until TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '7 days'),
-    CONSTRAINT pk_rate_limit_decisions PRIMARY KEY (id, created_at),
-    CONSTRAINT ck_rate_limit_decisions_permits CHECK (requested_permits > 0),
-    CONSTRAINT ck_rate_limit_decisions_remaining CHECK (remaining_permits IS NULL OR remaining_permits >= 0),
-    CONSTRAINT ck_rate_limit_decisions_retry_after CHECK (retry_after_millis IS NULL OR retry_after_millis >= 0),
-    CONSTRAINT ck_rate_limit_decisions_model_object CHECK (jsonb_typeof(model_request_units) = 'object')
-) PARTITION BY RANGE (created_at);
-
-COMMENT ON TABLE rate_limit_decisions IS 'Append-only distributed rate limit decision logs.';
-
-CREATE TABLE rate_limit_decisions_default PARTITION OF rate_limit_decisions DEFAULT;
-
-CREATE TABLE runtime_table_retention_policies (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    table_name VARCHAR(120) NOT NULL,
-    partition_key VARCHAR(120) NOT NULL,
-    retention_days INTEGER NOT NULL,
-    cleanup_enabled BOOLEAN NOT NULL DEFAULT TRUE,
-    archive_enabled BOOLEAN NOT NULL DEFAULT FALSE,
-    policy_status VARCHAR(32) NOT NULL DEFAULT 'ACTIVE',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT uk_runtime_table_retention_policies_table UNIQUE (table_name),
-    CONSTRAINT ck_runtime_table_retention_policies_days CHECK (retention_days > 0),
-    CONSTRAINT ck_runtime_table_retention_policies_status CHECK (policy_status IN ('ACTIVE', 'DISABLED'))
-);
-
-COMMENT ON TABLE runtime_table_retention_policies IS 'Retention and cleanup policies for high-cardinality runtime tables.';
-
 CREATE TABLE audit_events (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     event_type VARCHAR(80) NOT NULL,
@@ -944,11 +746,6 @@ EXECUTE FUNCTION touch_updated_at();
 
 CREATE TRIGGER trg_rate_limit_rules_touch_updated_at
 BEFORE UPDATE ON rate_limit_rules
-FOR EACH ROW
-EXECUTE FUNCTION touch_updated_at();
-
-CREATE TRIGGER trg_rate_limit_quota_policies_touch_updated_at
-BEFORE UPDATE ON rate_limit_quota_policies
 FOR EACH ROW
 EXECUTE FUNCTION touch_updated_at();
 
@@ -1042,41 +839,6 @@ BEFORE INSERT OR UPDATE ON publish_jobs
 FOR EACH ROW
 EXECUTE FUNCTION fill_tenant_id_from_instance_space();
 
-CREATE TRIGGER trg_rate_limit_quota_assignments_touch_updated_at
-BEFORE UPDATE ON rate_limit_quota_assignments
-FOR EACH ROW
-EXECUTE FUNCTION touch_updated_at();
-
-CREATE TRIGGER trg_rate_limit_quota_assignments_fill_release_context
-BEFORE INSERT OR UPDATE ON rate_limit_quota_assignments
-FOR EACH ROW
-EXECUTE FUNCTION fill_release_context();
-
-CREATE TRIGGER trg_rate_limit_buckets_touch_updated_at
-BEFORE UPDATE ON rate_limit_buckets
-FOR EACH ROW
-EXECUTE FUNCTION touch_updated_at();
-
-CREATE TRIGGER trg_rate_limit_buckets_fill_release_context
-BEFORE INSERT OR UPDATE ON rate_limit_buckets
-FOR EACH ROW
-EXECUTE FUNCTION fill_release_context();
-
-CREATE TRIGGER trg_rate_limit_usage_reports_fill_release_context
-BEFORE INSERT OR UPDATE ON rate_limit_usage_reports
-FOR EACH ROW
-EXECUTE FUNCTION fill_release_context();
-
-CREATE TRIGGER trg_rate_limit_decisions_fill_release_context
-BEFORE INSERT OR UPDATE ON rate_limit_decisions
-FOR EACH ROW
-EXECUTE FUNCTION fill_release_context();
-
-CREATE TRIGGER trg_runtime_table_retention_policies_touch_updated_at
-BEFORE UPDATE ON runtime_table_retention_policies
-FOR EACH ROW
-EXECUTE FUNCTION touch_updated_at();
-
 CREATE INDEX idx_instance_spaces_status ON instance_spaces (status);
 CREATE INDEX idx_instance_spaces_tenant_status ON instance_spaces (tenant_id, status);
 CREATE INDEX idx_instance_spaces_labels_gin ON instance_spaces USING GIN (labels);
@@ -1101,8 +863,6 @@ CREATE INDEX idx_breaker_rules_target_gin ON breaker_rules USING GIN (target_sel
 CREATE INDEX idx_rate_limit_rules_type_mode ON rate_limit_rules (limit_type, enforcement_mode);
 CREATE INDEX idx_rate_limit_rules_dimensions_gin ON rate_limit_rules USING GIN (dimensions);
 CREATE INDEX idx_rate_limit_rules_model_gin ON rate_limit_rules USING GIN (model_limit_config);
-CREATE INDEX idx_rate_limit_quota_policies_algorithm ON rate_limit_quota_policies (allocation_algorithm);
-
 CREATE INDEX idx_auth_policy_rules_type_action ON auth_policy_rules (auth_policy_type, auth_action);
 CREATE INDEX idx_auth_policy_rules_jwt_gin ON auth_policy_rules USING GIN (jwt_rules);
 CREATE INDEX idx_auth_policy_rules_from_gin ON auth_policy_rules USING GIN (authorization_from);
@@ -1134,26 +894,6 @@ CREATE INDEX idx_publish_jobs_status_next_run ON publish_jobs (job_status, next_
 CREATE INDEX idx_publish_jobs_release ON publish_jobs (release_id);
 CREATE INDEX idx_publish_jobs_record ON publish_jobs (publish_record_id);
 
-CREATE INDEX idx_rate_limit_quota_assignments_rule_client ON rate_limit_quota_assignments (rate_limit_rule_id, client_id);
-CREATE INDEX idx_rate_limit_quota_assignments_expires_at ON rate_limit_quota_assignments (expires_at);
-CREATE INDEX idx_rate_limit_usage_reports_rule_window ON rate_limit_usage_reports (rate_limit_rule_id, report_window_start, report_window_end);
-CREATE INDEX idx_rate_limit_usage_reports_client ON rate_limit_usage_reports (client_id, reported_at);
-CREATE INDEX idx_rate_limit_buckets_expires_at ON rate_limit_buckets (expires_at);
-CREATE INDEX idx_rate_limit_buckets_rule_key ON rate_limit_buckets (rate_limit_rule_id, limit_key_hash);
-CREATE INDEX idx_rate_limit_buckets_window ON rate_limit_buckets (window_start_at, window_end_at);
-CREATE INDEX idx_rate_limit_decisions_rule_created ON rate_limit_decisions (rate_limit_rule_id, created_at);
-CREATE INDEX idx_rate_limit_decisions_key_created ON rate_limit_decisions (limit_key_hash, created_at);
-CREATE INDEX idx_rate_limit_decisions_model_gin ON rate_limit_decisions USING GIN (model_request_units);
-
 CREATE INDEX idx_audit_events_resource ON audit_events (resource_type, resource_id);
 CREATE INDEX idx_audit_events_tenant_created_at ON audit_events (tenant_id, created_at);
 CREATE INDEX idx_audit_events_created_at ON audit_events (created_at);
-
-INSERT INTO runtime_table_retention_policies
-    (table_name, partition_key, retention_days, cleanup_enabled, archive_enabled)
-VALUES
-    ('rate_limit_decisions', 'created_at', 7, TRUE, FALSE),
-    ('rate_limit_buckets', 'window_start_at', 3, TRUE, FALSE),
-    ('rate_limit_usage_reports', 'reported_at', 30, TRUE, TRUE),
-    ('client_runtime_status_reports', 'created_at', 30, TRUE, TRUE)
-ON CONFLICT (table_name) DO NOTHING;

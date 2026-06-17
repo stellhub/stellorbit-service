@@ -84,9 +84,6 @@ public class RuleReleaseEntity implements Identifiable {
   @Column(name = "release_snapshot_json", columnDefinition = "jsonb")
   private Map<String, Object> releaseSnapshotJson;
 
-  @Column(name = "release_snapshot_bytes")
-  private byte[] releaseSnapshotBytes;
-
   @NotBlank(message = "校验和不能为空") @Column(nullable = false, length = 128)
   private String checksum;
 

@@ -55,7 +55,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 import java.util.UUID;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
@@ -64,7 +63,6 @@ import org.springframework.transaction.support.TransactionTemplate;
 @Service
 public class PublishGovernanceRulesUseCase {
 
-  private static final Set<String> RUNTIME_FORMATS = Set.of("JSON", "PROTOBUF");
   private static final String GOVERNANCE_NAMESPACE = "governance";
   private static final String SECURITY_NAMESPACE = "governance-security";
   private static final String SECURITY_CONFIG_GROUP = "security-materials";
@@ -961,7 +959,6 @@ public class PublishGovernanceRulesUseCase {
     release.setCompatibilityMessages(new ArrayList<>(sourceRelease.getCompatibilityMessages()));
     release.setApprovalStatus("NOT_REQUIRED");
     release.setReleaseSnapshotJson(releaseSnapshot);
-    release.setReleaseSnapshotBytes(null);
     release.setChecksum(sha256(releasePayload));
     release.setRollbackFromReleaseId(sourceRelease.getId());
     release.setReleaseNote(defaultText(request.reason(), "rollback release"));
@@ -1014,7 +1011,6 @@ public class PublishGovernanceRulesUseCase {
       item.setPriority(sourceItem.getPriority());
       item.setCueSource(sourceItem.getCueSource());
       item.setRuntimeSnapshotJson(copyMap(sourceItem.getRuntimeSnapshotJson()));
-      item.setRuntimeSnapshotBytes(copyBytes(sourceItem.getRuntimeSnapshotBytes()));
       item.setChecksum(sourceItem.getChecksum());
       items.add(item);
     }
@@ -1045,7 +1041,6 @@ public class PublishGovernanceRulesUseCase {
       record.setContentType(sourceRecord.getContentType());
       record.setRuntimeFormat(sourceRecord.getRuntimeFormat());
       record.setPayloadText(sourceRecord.getPayloadText());
-      record.setPayloadBytes(copyBytes(sourceRecord.getPayloadBytes()));
       record.setPayloadMetadata(
           withRollbackMetadata(
               sourceRecord.getPayloadMetadata(),
@@ -1077,8 +1072,8 @@ public class PublishGovernanceRulesUseCase {
         runtimeFormat == null || runtimeFormat.isBlank()
             ? "JSON"
             : runtimeFormat.trim().toUpperCase();
-    if (!RUNTIME_FORMATS.contains(normalized)) {
-      throw new InvalidRuleRequestException("runtimeFormat必须是JSON或PROTOBUF");
+    if (!"JSON".equals(normalized)) {
+      throw new InvalidRuleRequestException("runtimeFormat只支持JSON");
     }
     return normalized;
   }
@@ -1196,13 +1191,7 @@ public class PublishGovernanceRulesUseCase {
       String runtimeFormat,
       Map<String, Object> releaseSnapshot,
       String releasePayload) {
-    if ("JSON".equals(runtimeFormat)) {
-      release.setReleaseSnapshotJson(releaseSnapshot);
-      release.setReleaseSnapshotBytes(null);
-      return;
-    }
-    release.setReleaseSnapshotJson(null);
-    release.setReleaseSnapshotBytes(releasePayload.getBytes(StandardCharsets.UTF_8));
+    release.setReleaseSnapshotJson(releaseSnapshot);
   }
 
   private void setReleaseCompatibilityMetadata(
@@ -1235,11 +1224,7 @@ public class PublishGovernanceRulesUseCase {
       item.setCompatibilityMessages(new ArrayList<>(compiledRule.warnings()));
       item.setPriority(rule.getPriority());
       item.setCueSource(rule.getCueSource());
-      if ("JSON".equals(runtimeFormat)) {
-        item.setRuntimeSnapshotJson(snapshot);
-      } else {
-        item.setRuntimeSnapshotBytes(compiledRule.protobufPayload());
-      }
+      item.setRuntimeSnapshotJson(snapshot);
       item.setChecksum(compiledRule.checksum());
       items.add(item);
     }
@@ -1883,13 +1868,6 @@ public class PublishGovernanceRulesUseCase {
       return null;
     }
     return new LinkedHashMap<>(source);
-  }
-
-  private byte[] copyBytes(byte[] source) {
-    if (source == null) {
-      return null;
-    }
-    return source.clone();
   }
 
   private void markRulesPublished(UUID releaseId, OffsetDateTime publishedAt) {

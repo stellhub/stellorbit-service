@@ -19,6 +19,4 @@ public record RuntimeRuleSnapshotResponse(
     OffsetDateTime publishedAt,
     OffsetDateTime generatedAt,
     Map<String, Object> snapshotJson,
-    String snapshotBytesBase64,
-    List<RuntimeSnapshotRuleResponse> rules,
-    RuntimeNodeDirectoryResponse rateLimitNodeDirectory) {}
+    List<RuntimeSnapshotRuleResponse> rules) {}

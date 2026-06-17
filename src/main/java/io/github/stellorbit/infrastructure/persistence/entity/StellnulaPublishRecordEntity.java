@@ -68,9 +68,6 @@ public class StellnulaPublishRecordEntity implements Identifiable {
   @Column(name = "payload_text", columnDefinition = "text")
   private String payloadText;
 
-  @Column(name = "payload_bytes")
-  private byte[] payloadBytes;
-
   @JdbcTypeCode(SqlTypes.JSON)
   @Column(name = "payload_metadata", nullable = false, columnDefinition = "jsonb")
   private Map<String, Object> payloadMetadata = new LinkedHashMap<>();

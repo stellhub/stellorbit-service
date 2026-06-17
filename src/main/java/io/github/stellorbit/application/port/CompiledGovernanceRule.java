@@ -15,6 +15,5 @@ public record CompiledGovernanceRule(
     String content,
     String checksum,
     Map<String, Object> contentModel,
-    byte[] protobufPayload,
     List<String> warnings,
     List<String> explain) {}

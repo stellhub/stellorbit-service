@@ -109,7 +109,7 @@ public class RuntimeRuleDeliveryController {
     return runtimeRuleDeliveryUseCase.reportStatus(request);
   }
 
-  /** 记录客户端心跳并返回最新发布水位和限流节点目录。 */
+  /** 记录客户端心跳并返回最新发布水位。 */
   @PostMapping("/heartbeats")
   public ClientHeartbeatResponse heartbeat(@Valid @RequestBody ClientHeartbeatRequest request) {
     return runtimeRuleDeliveryUseCase.heartbeat(request);

@@ -149,7 +149,7 @@ public abstract class RuleAggregateService<
     entity.setRuleCode(request.ruleCode());
     entity.setRuleName(request.ruleName());
     entity.setSourceFormat(defaultString(request.sourceFormat(), "CUE"));
-    entity.setRuntimeFormat(defaultString(request.runtimeFormat(), "JSON"));
+    entity.setRuntimeFormat(normalizeRuntimeFormat(request.runtimeFormat()));
     entity.setCueSource(request.cueSource());
     entity.setRuntimeSnapshotJson(request.runtimeSnapshotJson());
     entity.setChecksum(request.checksum());
@@ -217,5 +217,16 @@ public abstract class RuleAggregateService<
 
   protected Boolean defaultBoolean(Boolean value, Boolean fallback) {
     return value == null ? fallback : value;
+  }
+
+  protected String normalizeRuntimeFormat(String runtimeFormat) {
+    String normalized =
+        runtimeFormat == null || runtimeFormat.isBlank()
+            ? "JSON"
+            : runtimeFormat.trim().toUpperCase();
+    if (!"JSON".equals(normalized)) {
+      throw new InvalidRuleRequestException("runtimeFormat只支持JSON");
+    }
+    return normalized;
   }
 }

@@ -79,9 +79,6 @@ public class ReleaseItemEntity implements Identifiable {
   @Column(name = "runtime_snapshot_json", columnDefinition = "jsonb")
   private Map<String, Object> runtimeSnapshotJson;
 
-  @Column(name = "runtime_snapshot_bytes")
-  private byte[] runtimeSnapshotBytes;
-
   @NotBlank(message = "校验和不能为空") @Column(nullable = false, length = 128)
   private String checksum;
 
