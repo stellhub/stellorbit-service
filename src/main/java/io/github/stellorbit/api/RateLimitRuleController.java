@@ -1,9 +1,9 @@
 package io.github.stellorbit.api;
 
-import io.github.stellorbit.application.service.RateLimitRuleService;
 import io.github.stellorbit.api.dto.CreateRateLimitRuleRequest;
 import io.github.stellorbit.api.dto.RateLimitRuleDetailResponse;
 import io.github.stellorbit.api.dto.RuleAggregateResponse;
+import io.github.stellorbit.application.service.RateLimitRuleService;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.UUID;

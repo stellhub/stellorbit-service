@@ -1,6 +1,5 @@
 package io.github.stellorbit.api;
 
-import io.github.stellorbit.application.usecase.RuntimeRuleDeliveryUseCase;
 import io.github.stellorbit.api.dto.ClientHeartbeatRequest;
 import io.github.stellorbit.api.dto.ClientHeartbeatResponse;
 import io.github.stellorbit.api.dto.ClientInstanceViewResponse;
@@ -12,6 +11,7 @@ import io.github.stellorbit.api.dto.ClientVersionNegotiationRequest;
 import io.github.stellorbit.api.dto.ClientVersionNegotiationResponse;
 import io.github.stellorbit.api.dto.RuntimeRuleSnapshotResponse;
 import io.github.stellorbit.api.dto.RuntimeRuleWatchEventResponse;
+import io.github.stellorbit.application.usecase.RuntimeRuleDeliveryUseCase;
 import jakarta.validation.Valid;
 import java.io.IOException;
 import java.time.OffsetDateTime;

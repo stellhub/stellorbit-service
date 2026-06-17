@@ -1,9 +1,9 @@
 package io.github.stellorbit.api;
 
-import io.github.stellorbit.application.service.AuthPolicyRuleService;
 import io.github.stellorbit.api.dto.AuthRuleDetailResponse;
 import io.github.stellorbit.api.dto.CreateAuthPolicyRuleRequest;
 import io.github.stellorbit.api.dto.RuleAggregateResponse;
+import io.github.stellorbit.application.service.AuthPolicyRuleService;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.UUID;

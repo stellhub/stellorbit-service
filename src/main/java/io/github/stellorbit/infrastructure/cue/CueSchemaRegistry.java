@@ -1,8 +1,8 @@
 package io.github.stellorbit.infrastructure.cue;
 
+import io.github.stellorbit.api.error.InvalidRuleRequestException;
 import io.github.stellorbit.infrastructure.persistence.entity.CueSchemaVersionEntity;
 import io.github.stellorbit.infrastructure.persistence.repository.CueSchemaVersionRepository;
-import io.github.stellorbit.api.error.InvalidRuleRequestException;
 import java.util.Map;
 import org.springframework.stereotype.Component;
 

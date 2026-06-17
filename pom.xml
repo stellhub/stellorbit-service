@@ -30,23 +30,6 @@
         </license>
     </licenses>
 
-    <developers>
-        <developer>
-            <id>stellhub</id>
-            <name>stellhub</name>
-            <email>xiaoyaoyunlian@gmail.com</email>
-            <organization>GitHub</organization>
-            <organizationUrl>https://github.com/stellhub</organizationUrl>
-        </developer>
-    </developers>
-
-    <scm>
-        <connection>scm:git:https://github.com/stellhub/stellorbit-service.git</connection>
-        <developerConnection>scm:git:git@github.com:stellhub/stellorbit-service.git</developerConnection>
-        <url>https://github.com/stellhub/stellorbit-service</url>
-        <tag>HEAD</tag>
-    </scm>
-
     <dependencyManagement>
         <dependencies>
             <dependency>
