@@ -36,7 +36,6 @@ public class StructuredGovernanceRuleContentCompiler implements GovernanceRuleCo
   private final RateLimitRuleRepository rateLimitRuleRepository;
   private final AuthPolicyRuleRepository authPolicyRuleRepository;
   private final CueRuleCompiler cueRuleCompiler;
-  private final ObjectMapper objectMapper;
   private final ObjectMapper canonicalObjectMapper;
 
   public StructuredGovernanceRuleContentCompiler(
@@ -51,7 +50,6 @@ public class StructuredGovernanceRuleContentCompiler implements GovernanceRuleCo
     this.rateLimitRuleRepository = rateLimitRuleRepository;
     this.authPolicyRuleRepository = authPolicyRuleRepository;
     this.cueRuleCompiler = cueRuleCompiler;
-    this.objectMapper = objectMapper;
     this.canonicalObjectMapper =
         objectMapper.copy().configure(SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true);
   }
@@ -81,7 +79,7 @@ public class StructuredGovernanceRuleContentCompiler implements GovernanceRuleCo
     String content = toCanonicalJson(normalizedModel);
     return new CompiledGovernanceRule(
         rule,
-        configId(application, rule, stellnulaRuleType),
+        configId(application, stellnulaRuleType),
         stellnulaRuleType,
         (String) normalizedModel.get("targetService"),
         (String) normalizedModel.get("status"),
@@ -227,26 +225,12 @@ public class StructuredGovernanceRuleContentCompiler implements GovernanceRuleCo
     return priority == null ? 1000 : priority;
   }
 
-  private String configId(
-      ApplicationEntity application, GovernanceRuleEntity rule, String ruleType) {
-    return "stellorbit."
-        + normalize(application.getApplicationCode())
-        + "."
-        + normalize(ruleType)
-        + "."
-        + normalize(rule.getRuleCode());
+  private String configId(ApplicationEntity application, String ruleType) {
+    return "stellorbit." + normalize(application.getApplicationCode()) + "." + normalize(ruleType);
   }
 
   private String normalize(String value) {
     return value.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9_.-]", "-");
-  }
-
-  private String toJson(Object value) {
-    try {
-      return objectMapper.writeValueAsString(value);
-    } catch (JsonProcessingException exception) {
-      throw new InvalidRuleRequestException("治理规则内容序列化失败: " + exception.getMessage());
-    }
   }
 
   private String toCanonicalJson(Object value) {

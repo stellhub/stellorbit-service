@@ -6,7 +6,9 @@ import io.github.stellorbit.api.dto.RuleReleaseDryRunResponse;
 import io.github.stellorbit.api.error.InvalidRuleRequestException;
 import io.github.stellorbit.api.error.ResourceNotFoundException;
 import io.github.stellorbit.api.security.ControlPlaneSecurityContextHolder;
+import io.github.stellorbit.application.port.AggregatedGovernanceRuleConfig;
 import io.github.stellorbit.application.port.CompiledGovernanceRule;
+import io.github.stellorbit.application.port.GovernanceRuleAggregatePayloadBuilder;
 import io.github.stellorbit.application.port.GovernanceRuleCompatibilityValidator;
 import io.github.stellorbit.application.port.GovernanceRuleConflictDetector;
 import io.github.stellorbit.application.port.GovernanceRuleContentCompiler;
@@ -17,6 +19,7 @@ import io.github.stellorbit.infrastructure.persistence.entity.RuleReleaseEntity;
 import io.github.stellorbit.infrastructure.persistence.repository.ApplicationRepository;
 import io.github.stellorbit.infrastructure.persistence.repository.GovernanceRuleRepository;
 import io.github.stellorbit.infrastructure.persistence.repository.RuleReleaseRepository;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -31,6 +34,7 @@ public class DryRunGovernanceRulesUseCase {
   private final ApplicationRepository applicationRepository;
   private final RuleReleaseRepository ruleReleaseRepository;
   private final GovernanceRuleContentCompiler governanceRuleContentCompiler;
+  private final GovernanceRuleAggregatePayloadBuilder governanceRuleAggregatePayloadBuilder;
   private final GovernanceRuleConflictDetector governanceRuleConflictDetector;
   private final GovernanceRuleCompatibilityValidator governanceRuleCompatibilityValidator;
 
@@ -39,12 +43,14 @@ public class DryRunGovernanceRulesUseCase {
       ApplicationRepository applicationRepository,
       RuleReleaseRepository ruleReleaseRepository,
       GovernanceRuleContentCompiler governanceRuleContentCompiler,
+      GovernanceRuleAggregatePayloadBuilder governanceRuleAggregatePayloadBuilder,
       GovernanceRuleConflictDetector governanceRuleConflictDetector,
       GovernanceRuleCompatibilityValidator governanceRuleCompatibilityValidator) {
     this.governanceRuleRepository = governanceRuleRepository;
     this.applicationRepository = applicationRepository;
     this.ruleReleaseRepository = ruleReleaseRepository;
     this.governanceRuleContentCompiler = governanceRuleContentCompiler;
+    this.governanceRuleAggregatePayloadBuilder = governanceRuleAggregatePayloadBuilder;
     this.governanceRuleConflictDetector = governanceRuleConflictDetector;
     this.governanceRuleCompatibilityValidator = governanceRuleCompatibilityValidator;
   }
@@ -97,11 +103,22 @@ public class DryRunGovernanceRulesUseCase {
       warnings.addAll(compatibilityResult.warnings());
     }
 
+    OffsetDateTime generatedAt = OffsetDateTime.now();
+    List<AggregatedGovernanceRuleConfig> aggregatedConfigs =
+        governanceRuleAggregatePayloadBuilder.build(
+            application,
+            request.releaseVersion(),
+            request.releaseName(),
+            runtimeFormat,
+            generatedAt,
+            compiledRules);
     Map<String, Object> releaseSnapshot =
-        buildReleaseSnapshot(request, runtimeFormat, application, compiledRules);
+        buildReleaseSnapshot(
+            request, runtimeFormat, application, compiledRules, generatedAt, aggregatedConfigs);
     explain.add(
         "dry-run only: no rule_releases, release_items or stellnula_publish_records created");
     explain.add("compiled rule count: " + compiledRules.size());
+    explain.add("aggregated governance config count: " + aggregatedConfigs.size());
     return new RuleReleaseDryRunResponse(
         request.instanceSpaceId(),
         request.applicationId(),
@@ -135,17 +152,38 @@ public class DryRunGovernanceRulesUseCase {
       PublishGovernanceRulesRequest request,
       String runtimeFormat,
       ApplicationEntity application,
-      List<CompiledGovernanceRule> compiledRules) {
+      List<CompiledGovernanceRule> compiledRules,
+      OffsetDateTime generatedAt,
+      List<AggregatedGovernanceRuleConfig> aggregatedConfigs) {
     Map<String, Object> snapshot = new LinkedHashMap<>();
     snapshot.put("instanceSpaceId", request.instanceSpaceId().toString());
     snapshot.put("applicationId", request.applicationId().toString());
     snapshot.put("applicationCode", application.getApplicationCode());
     snapshot.put("releaseVersion", request.releaseVersion());
     snapshot.put("releaseName", request.releaseName());
+    snapshot.put("generatedAt", generatedAt.toString());
     snapshot.put("sourceFormat", "CUE");
     snapshot.put("runtimeFormat", runtimeFormat);
     snapshot.put(
+        "governanceConfigs",
+        aggregatedConfigs.stream().map(this::toAggregateConfigSnapshot).toList());
+    snapshot.put(
         "rules", compiledRules.stream().map(CompiledGovernanceRule::contentModel).toList());
+    return snapshot;
+  }
+
+  private Map<String, Object> toAggregateConfigSnapshot(
+      AggregatedGovernanceRuleConfig aggregatedConfig) {
+    Map<String, Object> snapshot = new LinkedHashMap<>();
+    snapshot.put("configId", aggregatedConfig.configId());
+    snapshot.put("ruleName", aggregatedConfig.ruleName());
+    snapshot.put("ruleType", aggregatedConfig.ruleType());
+    snapshot.put("stellnulaRuleType", aggregatedConfig.stellnulaRuleType());
+    snapshot.put("publishKind", aggregatedConfig.publishKind());
+    snapshot.put("ruleCount", aggregatedConfig.rules().size());
+    snapshot.put("checksum", aggregatedConfig.aggregateChecksum());
+    snapshot.put("contentChecksum", aggregatedConfig.checksum());
+    snapshot.put("content", aggregatedConfig.contentModel());
     return snapshot;
   }
 

@@ -14,20 +14,8 @@ public class GovernanceRuleConflictDetector {
   public RuleSemanticCheckResult detect(List<CompiledGovernanceRule> compiledRules) {
     List<String> errors = new ArrayList<>();
     List<String> warnings = new ArrayList<>();
-    Map<String, CompiledGovernanceRule> configIds = new LinkedHashMap<>();
     Map<String, CompiledGovernanceRule> fingerprints = new LinkedHashMap<>();
     for (CompiledGovernanceRule rule : compiledRules) {
-      CompiledGovernanceRule sameConfigId = configIds.putIfAbsent(rule.configId(), rule);
-      if (sameConfigId != null) {
-        errors.add(
-            "配置ID冲突: "
-                + rule.configId()
-                + " 被 "
-                + sameConfigId.rule().getRuleCode()
-                + " 和 "
-                + rule.rule().getRuleCode()
-                + " 同时使用");
-      }
       String fingerprint = conflictFingerprint(rule);
       CompiledGovernanceRule sameFingerprint = fingerprints.putIfAbsent(fingerprint, rule);
       if (sameFingerprint != null) {

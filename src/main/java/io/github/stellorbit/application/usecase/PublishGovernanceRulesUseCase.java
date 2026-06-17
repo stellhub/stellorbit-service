@@ -12,7 +12,9 @@ import io.github.stellorbit.api.dto.StellnulaPublishRecordResponse;
 import io.github.stellorbit.api.error.InvalidRuleRequestException;
 import io.github.stellorbit.api.error.ResourceNotFoundException;
 import io.github.stellorbit.api.security.ControlPlaneSecurityContextHolder;
+import io.github.stellorbit.application.port.AggregatedGovernanceRuleConfig;
 import io.github.stellorbit.application.port.CompiledGovernanceRule;
+import io.github.stellorbit.application.port.GovernanceRuleAggregatePayloadBuilder;
 import io.github.stellorbit.application.port.GovernanceRuleCompatibilityValidator;
 import io.github.stellorbit.application.port.GovernanceRuleConflictDetector;
 import io.github.stellorbit.application.port.GovernanceRuleContentCompiler;
@@ -85,6 +87,7 @@ public class PublishGovernanceRulesUseCase {
   private final PublishLockRepository publishLockRepository;
   private final StellnulaPublishClient stellnulaPublishClient;
   private final GovernanceRuleContentCompiler governanceRuleContentCompiler;
+  private final GovernanceRuleAggregatePayloadBuilder governanceRuleAggregatePayloadBuilder;
   private final GovernanceRuleConflictDetector governanceRuleConflictDetector;
   private final GovernanceRuleCompatibilityValidator governanceRuleCompatibilityValidator;
   private final TransactionTemplate transactionTemplate;
@@ -104,6 +107,7 @@ public class PublishGovernanceRulesUseCase {
       PublishLockRepository publishLockRepository,
       StellnulaPublishClient stellnulaPublishClient,
       GovernanceRuleContentCompiler governanceRuleContentCompiler,
+      GovernanceRuleAggregatePayloadBuilder governanceRuleAggregatePayloadBuilder,
       GovernanceRuleConflictDetector governanceRuleConflictDetector,
       GovernanceRuleCompatibilityValidator governanceRuleCompatibilityValidator,
       TransactionTemplate transactionTemplate,
@@ -121,6 +125,7 @@ public class PublishGovernanceRulesUseCase {
     this.publishLockRepository = publishLockRepository;
     this.stellnulaPublishClient = stellnulaPublishClient;
     this.governanceRuleContentCompiler = governanceRuleContentCompiler;
+    this.governanceRuleAggregatePayloadBuilder = governanceRuleAggregatePayloadBuilder;
     this.governanceRuleConflictDetector = governanceRuleConflictDetector;
     this.governanceRuleCompatibilityValidator = governanceRuleCompatibilityValidator;
     this.transactionTemplate = transactionTemplate;
@@ -209,9 +214,19 @@ public class PublishGovernanceRulesUseCase {
       validateRuleSelection(request, rules);
       List<CompiledGovernanceRule> compiledRules = compileRules(rules, application);
       RuleSemanticCheckResult semanticCheckResult = validateSemanticChecks(request, compiledRules);
+      OffsetDateTime generatedAt = OffsetDateTime.now();
+      List<AggregatedGovernanceRuleConfig> aggregatedConfigs =
+          governanceRuleAggregatePayloadBuilder.build(
+              application,
+              request.releaseVersion(),
+              request.releaseName(),
+              runtimeFormat,
+              generatedAt,
+              compiledRules);
       List<Map<String, Object>> itemSnapshots = buildItemSnapshots(compiledRules);
       Map<String, Object> releaseSnapshot =
-          buildReleaseSnapshot(request, runtimeFormat, itemSnapshots, application);
+          buildReleaseSnapshot(
+              request, runtimeFormat, itemSnapshots, application, generatedAt, aggregatedConfigs);
       String releasePayload = toJson(releaseSnapshot);
       setReleaseCompatibilityMetadata(release, compiledRules, semanticCheckResult);
       setReleasePayload(release, runtimeFormat, releaseSnapshot, releasePayload);
@@ -230,6 +245,7 @@ public class PublishGovernanceRulesUseCase {
               instanceSpace,
               configGroup,
               idempotencyKey,
+              aggregatedConfigs,
               compiledRules);
       stellnulaPublishRecordRepository.saveAllAndFlush(publishRecords);
       enqueuePublishJobs(
@@ -1150,17 +1166,37 @@ public class PublishGovernanceRulesUseCase {
       PublishGovernanceRulesRequest request,
       String runtimeFormat,
       List<Map<String, Object>> itemSnapshots,
-      ApplicationEntity application) {
+      ApplicationEntity application,
+      OffsetDateTime generatedAt,
+      List<AggregatedGovernanceRuleConfig> aggregatedConfigs) {
     Map<String, Object> snapshot = new LinkedHashMap<>();
     snapshot.put("instanceSpaceId", request.instanceSpaceId().toString());
     snapshot.put("applicationId", request.applicationId().toString());
     snapshot.put("applicationCode", application.getApplicationCode());
     snapshot.put("releaseVersion", request.releaseVersion());
     snapshot.put("releaseName", request.releaseName());
+    snapshot.put("generatedAt", generatedAt.toString());
     snapshot.put("sourceFormat", "CUE");
     snapshot.put("runtimeFormat", runtimeFormat);
     snapshot.put("protocolVersion", RUNTIME_PROTOCOL_VERSION);
+    snapshot.put(
+        "governanceConfigs",
+        aggregatedConfigs.stream().map(this::buildAggregateConfigSnapshot).toList());
     snapshot.put("rules", itemSnapshots);
+    return snapshot;
+  }
+
+  private Map<String, Object> buildAggregateConfigSnapshot(
+      AggregatedGovernanceRuleConfig aggregatedConfig) {
+    Map<String, Object> snapshot = new LinkedHashMap<>();
+    snapshot.put("configId", aggregatedConfig.configId());
+    snapshot.put("ruleName", aggregatedConfig.ruleName());
+    snapshot.put("ruleType", aggregatedConfig.ruleType());
+    snapshot.put("stellnulaRuleType", aggregatedConfig.stellnulaRuleType());
+    snapshot.put("publishKind", aggregatedConfig.publishKind());
+    snapshot.put("ruleCount", aggregatedConfig.rules().size());
+    snapshot.put("checksum", aggregatedConfig.aggregateChecksum());
+    snapshot.put("contentChecksum", aggregatedConfig.checksum());
     return snapshot;
   }
 
@@ -1247,18 +1283,15 @@ public class PublishGovernanceRulesUseCase {
       InstanceSpaceEntity instanceSpace,
       String configGroup,
       String idempotencyKey,
+      List<AggregatedGovernanceRuleConfig> aggregatedConfigs,
       List<CompiledGovernanceRule> compiledRules) {
     List<StellnulaPublishRecordEntity> records = new ArrayList<>();
-    for (CompiledGovernanceRule compiledRule : compiledRules) {
+    for (AggregatedGovernanceRuleConfig aggregatedConfig : aggregatedConfigs) {
       records.add(
           createPublishRecord(
-              release,
-              request,
-              application,
-              instanceSpace,
-              configGroup,
-              idempotencyKey,
-              compiledRule));
+              release, request, instanceSpace, configGroup, idempotencyKey, aggregatedConfig));
+    }
+    for (CompiledGovernanceRule compiledRule : compiledRules) {
       if ("AUTH".equals(compiledRule.rule().getRuleType())) {
         records.addAll(
             createAuthMaterialPublishRecords(
@@ -1603,32 +1636,31 @@ public class PublishGovernanceRulesUseCase {
   private StellnulaPublishRecordEntity createPublishRecord(
       RuleReleaseEntity release,
       PublishGovernanceRulesRequest request,
-      ApplicationEntity application,
       InstanceSpaceEntity instanceSpace,
       String configGroup,
       String idempotencyKey,
-      CompiledGovernanceRule compiledRule) {
-    GovernanceRuleEntity rule = compiledRule.rule();
+      AggregatedGovernanceRuleConfig aggregatedConfig) {
     StellnulaPublishRecordEntity record = new StellnulaPublishRecordEntity();
     record.setReleaseId(release.getId());
     record.setInstanceSpaceId(release.getInstanceSpaceId());
     record.setApplicationId(release.getApplicationId());
-    record.setPublishKind(toPublishKind(rule.getRuleType()));
+    record.setPublishKind(aggregatedConfig.publishKind());
     record.setNamespaceCode(GOVERNANCE_NAMESPACE);
     record.setConfigGroup(configGroup);
-    record.setConfigKey(compiledRule.configId());
-    record.setDataId(compiledRule.configId());
+    record.setConfigKey(aggregatedConfig.configId());
+    record.setDataId(aggregatedConfig.configId());
     record.setContentType("application/json");
     record.setRuntimeFormat("JSON");
-    record.setPayloadText(compiledRule.content());
+    record.setPayloadText(aggregatedConfig.content());
     Map<String, Object> metadata = new LinkedHashMap<>();
     metadata.put("releaseVersion", release.getReleaseVersion());
-    metadata.put("ruleId", rule.getId().toString());
-    metadata.put("ruleType", rule.getRuleType());
-    metadata.put("ruleName", rule.getRuleName());
-    metadata.put("stellnulaRuleType", compiledRule.stellnulaRuleType());
-    metadata.put("schemaVersion", compiledRule.schemaVersion());
-    metadata.put("targetService", compiledRule.targetService());
+    metadata.put("ruleType", aggregatedConfig.ruleType());
+    metadata.put("ruleName", aggregatedConfig.ruleName());
+    metadata.put("stellnulaRuleType", aggregatedConfig.stellnulaRuleType());
+    metadata.put("schemaVersion", aggregatedConfig.contentModel().get("schemaVersion"));
+    metadata.put("configId", aggregatedConfig.configId());
+    metadata.put("ruleCount", aggregatedConfig.rules().size());
+    metadata.put("aggregateChecksum", aggregatedConfig.aggregateChecksum());
     metadata.put("env", defaultText(request.env(), instanceSpace.getEnvironment()));
     metadata.put("region", defaultText(request.region(), DEFAULT_SCOPE));
     metadata.put("zone", defaultText(request.zone(), DEFAULT_SCOPE));
@@ -1638,22 +1670,12 @@ public class PublishGovernanceRulesUseCase {
     metadata.put(
         "releaseNote", defaultText(request.releaseNote(), "publish from stellorbit-service"));
     record.setPayloadMetadata(metadata);
-    record.setChecksum(compiledRule.checksum());
-    record.setIdempotencyKey(recordIdempotencyKey(idempotencyKey, compiledRule.configId()));
+    record.setChecksum(aggregatedConfig.checksum());
+    record.setIdempotencyKey(recordIdempotencyKey(idempotencyKey, aggregatedConfig.configId()));
     record.setRetryCount(0);
     record.setMaxRetryCount(defaultInt(release.getMaxRetryCount(), DEFAULT_MAX_RETRY_COUNT));
     record.setPublishStatus("PENDING");
     return record;
-  }
-
-  private String toPublishKind(String ruleType) {
-    return switch (ruleType) {
-      case "ROUTE" -> "ROUTE_RULES";
-      case "BREAKER" -> "BREAKER_RULES";
-      case "RATE_LIMIT" -> "RATE_LIMIT_RULES";
-      case "AUTH" -> "AUTH_RULES";
-      default -> "RULE_SNAPSHOT";
-    };
   }
 
   private Map<String, Object> withStellnulaResult(
