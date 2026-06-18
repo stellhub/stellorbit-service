@@ -6,7 +6,9 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.github.benmanes.caffeine.cache.stats.CacheStats;
 import io.github.stellflux.caffeine.StellfluxCaffeineCache;
 import io.github.stellflux.caffeine.StellfluxCaffeineCacheFactory;
+import io.github.stellorbit.api.dto.DistributedRateLimitRuleConfigChangeResponse;
 import io.github.stellorbit.api.dto.DistributedRateLimitRuleConfigResponse;
+import io.github.stellorbit.api.dto.DistributedRateLimitRuleDeltaResponse;
 import io.github.stellorbit.api.dto.DistributedRateLimitRuleSnapshotResponse;
 import io.github.stellorbit.api.dto.PageResponse;
 import io.github.stellorbit.api.error.InvalidRuleRequestException;
@@ -32,6 +34,7 @@ import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
@@ -54,8 +57,11 @@ public class DistributedRateLimitRuleRuntimeUseCase {
   private static final String RUNTIME_FORMAT = "JSON";
   private static final String RELEASE_NAME_PREFIX = "distributed-rate-limit-snapshot-";
   private static final int MAX_PAGE_SIZE = 500;
+  private static final int MAX_CHANGE_LOG_SIZE = 1024;
   private static final String SNAPSHOT_CACHE_NAME = "stellorbit-distributed-rate-limit-snapshot";
   private static final String SNAPSHOT_CACHE_KEY = "latest";
+  private static final String UPSERT_CONFIG = "UPSERT_CONFIG";
+  private static final String DELETE_CONFIG = "DELETE_CONFIG";
 
   private final GovernanceRuleRepository governanceRuleRepository;
   private final RateLimitRuleRepository rateLimitRuleRepository;
@@ -98,15 +104,61 @@ public class DistributedRateLimitRuleRuntimeUseCase {
 
   /** 判断调用方持有的快照水位是否已经落后。 */
   public boolean changedSince(Long currentSnapshotVersion, String currentChecksum) {
+    return requiresFullSync(currentSnapshotVersion, currentChecksum)
+        || !Objects.equals(currentSnapshotVersion, latestSnapshotVersion());
+  }
+
+  /** 判断当前水位是否无法通过本机增量日志追赶，无法追赶时调用方应重新分页全量同步。 */
+  public boolean requiresFullSync(Long currentSnapshotVersion, String currentChecksum) {
     CacheState state = currentCacheState();
-    if (currentSnapshotVersion == null && isBlank(currentChecksum)) {
+    if (currentSnapshotVersion == null) {
       return true;
     }
-    if (currentSnapshotVersion != null
-        && !Objects.equals(currentSnapshotVersion, state.snapshotVersion())) {
+    if (currentSnapshotVersion < 0 || currentSnapshotVersion > state.snapshotVersion()) {
       return true;
     }
-    return !isBlank(currentChecksum) && !Objects.equals(currentChecksum, state.checksum());
+    if (Objects.equals(currentSnapshotVersion, state.snapshotVersion())) {
+      return !isBlank(currentChecksum) && !Objects.equals(currentChecksum, state.checksum());
+    }
+    List<ChangeBatch> batches = changeBatchesAfter(state, currentSnapshotVersion);
+    if (batches.isEmpty() || batches.getFirst().fromSnapshotVersion() != currentSnapshotVersion) {
+      return true;
+    }
+    if (!isContinuous(currentSnapshotVersion, state.snapshotVersion(), batches)) {
+      return true;
+    }
+    return !isBlank(currentChecksum)
+        && !Objects.equals(currentChecksum, batches.getFirst().fromChecksum());
+  }
+
+  /** 从指定快照水位开始读取分布式限流规则配置增量。 */
+  public DistributedRateLimitRuleDeltaResponse deltaSince(
+      Long currentSnapshotVersion, String currentChecksum) {
+    if (requiresFullSync(currentSnapshotVersion, currentChecksum)) {
+      throw new InvalidRuleRequestException("当前快照水位无法通过增量日志追赶，请重新执行分页全量同步");
+    }
+    CacheState state = currentCacheState();
+    if (Objects.equals(currentSnapshotVersion, state.snapshotVersion())) {
+      return new DistributedRateLimitRuleDeltaResponse(
+          state.snapshotVersion(),
+          state.snapshotVersion(),
+          state.checksum(),
+          state.checksum(),
+          state.generatedAt(),
+          0,
+          List.of());
+    }
+    List<ChangeBatch> batches = changeBatchesAfter(state, currentSnapshotVersion);
+    List<DistributedRateLimitRuleConfigChangeResponse> changes =
+        batches.stream().flatMap(batch -> batch.changes().stream()).toList();
+    return new DistributedRateLimitRuleDeltaResponse(
+        currentSnapshotVersion,
+        state.snapshotVersion(),
+        batches.getFirst().fromChecksum(),
+        state.checksum(),
+        state.generatedAt(),
+        changes.size(),
+        changes);
   }
 
   /** 返回当前内存快照版本。 */
@@ -130,6 +182,7 @@ public class DistributedRateLimitRuleRuntimeUseCase {
     telemetry.put("snapshotChecksum", state.checksum());
     telemetry.put("totalApplications", state.configs().size());
     telemetry.put("totalRules", state.totalRuleCount());
+    telemetry.put("changeLogSize", state.changeLog().size());
     return telemetry;
   }
 
@@ -141,7 +194,9 @@ public class DistributedRateLimitRuleRuntimeUseCase {
     List<UUID> ruleIds = orderedRules.stream().map(GovernanceRuleEntity::getId).toList();
     Map<UUID, RateLimitRuleEntity> detailById = loadRateLimitDetails(ruleIds);
     Map<UUID, ApplicationEntity> applicationById = loadApplications(orderedRules);
-    String sourceChecksum = sourceChecksum(orderedRules, detailById, applicationById);
+    Map<String, String> sourceChecksumByConfigId =
+        sourceChecksumByConfigId(orderedRules, detailById, applicationById);
+    String sourceChecksum = sourceChecksum(sourceChecksumByConfigId);
 
     CacheState current = currentCacheState();
     if (Objects.equals(sourceChecksum, current.sourceChecksum())) {
@@ -151,7 +206,13 @@ public class DistributedRateLimitRuleRuntimeUseCase {
     long nextVersion = Math.max(1L, current.snapshotVersion() + 1L);
     OffsetDateTime generatedAt = OffsetDateTime.now();
     List<DistributedRateLimitRuleConfigResponse> configs =
-        buildDistributedRateLimitConfigs(orderedRules, applicationById, nextVersion, generatedAt);
+        buildDistributedRateLimitConfigs(
+            orderedRules,
+            applicationById,
+            nextVersion,
+            generatedAt,
+            current,
+            sourceChecksumByConfigId);
     Map<String, DistributedRateLimitRuleConfigResponse> configById =
         configs.stream()
             .collect(
@@ -160,21 +221,36 @@ public class DistributedRateLimitRuleRuntimeUseCase {
                     Function.identity(),
                     (left, right) -> right,
                     LinkedHashMap::new));
+    String nextChecksum = snapshotChecksum(configs);
+    List<DistributedRateLimitRuleConfigChangeResponse> changes =
+        configChanges(current, configById, sourceChecksumByConfigId, nextVersion);
+    ChangeBatch changeBatch =
+        new ChangeBatch(
+            current.snapshotVersion(),
+            nextVersion,
+            current.checksum(),
+            nextChecksum,
+            generatedAt,
+            List.copyOf(changes));
     CacheState next =
         new CacheState(
             nextVersion,
             sourceChecksum,
-            snapshotChecksum(configs),
+            nextChecksum,
             generatedAt,
             configs.stream().mapToInt(DistributedRateLimitRuleConfigResponse::ruleCount).sum(),
             List.copyOf(configs),
-            Map.copyOf(configById));
+            Map.copyOf(configById),
+            Map.copyOf(sourceChecksumByConfigId),
+            appendChangeLog(current.changeLog(), changeBatch));
     cacheStateCache.put(SNAPSHOT_CACHE_KEY, next);
     log.info(
-        "Refreshed distributed rate limit rule snapshot, version={}, applications={}, rules={}",
+        "Refreshed distributed rate limit rule snapshot, version={}, applications={}, rules={},"
+            + " changes={}",
         next.snapshotVersion(),
         next.configs().size(),
-        next.totalRuleCount());
+        next.totalRuleCount(),
+        changes.size());
     return true;
   }
 
@@ -224,6 +300,24 @@ public class DistributedRateLimitRuleRuntimeUseCase {
     statsView.put("evictionCount", stats.evictionCount());
     statsView.put("evictionWeight", stats.evictionWeight());
     return statsView;
+  }
+
+  private List<ChangeBatch> changeBatchesAfter(CacheState state, long currentSnapshotVersion) {
+    return state.changeLog().stream()
+        .filter(batch -> batch.toSnapshotVersion() > currentSnapshotVersion)
+        .toList();
+  }
+
+  private boolean isContinuous(
+      long currentSnapshotVersion, long latestSnapshotVersion, List<ChangeBatch> batches) {
+    long expectedVersion = currentSnapshotVersion;
+    for (ChangeBatch batch : batches) {
+      if (batch.fromSnapshotVersion() != expectedVersion) {
+        return false;
+      }
+      expectedVersion = batch.toSnapshotVersion();
+    }
+    return expectedVersion == latestSnapshotVersion;
   }
 
   private DistributedRateLimitRuleSnapshotResponse toSnapshotResponse(
@@ -301,74 +395,92 @@ public class DistributedRateLimitRuleRuntimeUseCase {
     return applicationById;
   }
 
-  private String sourceChecksum(
+  private Map<String, String> sourceChecksumByConfigId(
       List<GovernanceRuleEntity> rules,
       Map<UUID, RateLimitRuleEntity> detailById,
       Map<UUID, ApplicationEntity> applicationById) {
-    List<Map<String, Object>> sourceItems = new ArrayList<>();
-    for (GovernanceRuleEntity rule : rules) {
-      RateLimitRuleEntity detail = detailById.get(rule.getId());
-      ApplicationEntity application = applicationById.get(rule.getApplicationId());
-      String executionLocation =
-          RateLimitRuleModeSupport.normalizeExecutionLocation(
-              detail.getExecutionLocation(), detail.getEnforcementMode());
-      String coordinationMode =
-          RateLimitRuleModeSupport.normalizeCoordinationMode(
-              detail.getCoordinationMode(), detail.getEnforcementMode());
-      Map<String, Object> item = new LinkedHashMap<>();
-      item.put("instanceSpaceId", rule.getInstanceSpaceId());
-      item.put("applicationId", rule.getApplicationId());
-      item.put("applicationCode", application.getApplicationCode());
-      item.put("ruleId", rule.getId());
-      item.put("ruleCode", rule.getRuleCode());
-      item.put("ruleName", rule.getRuleName());
-      item.put("sourceFormat", rule.getSourceFormat());
-      item.put("runtimeFormat", rule.getRuntimeFormat());
-      item.put("cueSource", rule.getCueSource());
-      item.put("runtimeSnapshotJson", rule.getRuntimeSnapshotJson());
-      item.put("checksum", rule.getChecksum());
-      item.put("priority", rule.getPriority());
-      item.put("enabled", rule.getEnabled());
-      item.put("status", rule.getStatus());
-      item.put("draftVersion", rule.getDraftVersion());
-      item.put("updatedAt", text(rule.getUpdatedAt()));
-      item.put("rowVersion", rule.getRowVersion());
-      item.put("limitType", detail.getLimitType());
-      item.put("limitAlgorithm", detail.getLimitAlgorithm());
-      item.put("executionLocation", executionLocation);
-      item.put("coordinationMode", coordinationMode);
-      item.put(
-          "enforcementMode",
-          RateLimitRuleModeSupport.toLegacyEnforcementMode(executionLocation, coordinationMode));
-      item.put("targetSelector", detail.getTargetSelector());
-      item.put("dimensions", detail.getDimensions());
-      item.put("quotaConfig", detail.getQuotaConfig());
-      item.put("windowConfig", detail.getWindowConfig());
-      item.put("burstConfig", detail.getBurstConfig());
-      item.put("modelLimitConfig", detail.getModelLimitConfig());
-      item.put("fallbackPolicy", detail.getFallbackPolicy());
-      item.put("responsePolicy", detail.getResponsePolicy());
-      item.put("detailUpdatedAt", text(detail.getUpdatedAt()));
-      sourceItems.add(item);
+    Map<UUID, List<GovernanceRuleEntity>> rulesByApplication = rulesByApplication(rules);
+    Map<String, String> checksumByConfigId = new LinkedHashMap<>();
+    for (Map.Entry<UUID, List<GovernanceRuleEntity>> entry : rulesByApplication.entrySet()) {
+      ApplicationEntity application = applicationById.get(entry.getKey());
+      List<Map<String, Object>> sourceItems = new ArrayList<>();
+      for (GovernanceRuleEntity rule : entry.getValue()) {
+        sourceItems.add(sourceItem(rule, detailById.get(rule.getId()), application));
+      }
+      checksumByConfigId.put(rateLimitConfigId(application), sha256(toJson(sourceItems)));
     }
-    return sha256(toJson(sourceItems));
+    return checksumByConfigId;
+  }
+
+  private String sourceChecksum(Map<String, String> sourceChecksumByConfigId) {
+    return sha256(toJson(sourceChecksumByConfigId));
+  }
+
+  private Map<String, Object> sourceItem(
+      GovernanceRuleEntity rule, RateLimitRuleEntity detail, ApplicationEntity application) {
+    String executionLocation =
+        RateLimitRuleModeSupport.normalizeExecutionLocation(
+            detail.getExecutionLocation(), detail.getEnforcementMode());
+    String coordinationMode =
+        RateLimitRuleModeSupport.normalizeCoordinationMode(
+            detail.getCoordinationMode(), detail.getEnforcementMode());
+    Map<String, Object> item = new LinkedHashMap<>();
+    item.put("instanceSpaceId", rule.getInstanceSpaceId());
+    item.put("applicationId", rule.getApplicationId());
+    item.put("applicationCode", application.getApplicationCode());
+    item.put("ruleId", rule.getId());
+    item.put("ruleCode", rule.getRuleCode());
+    item.put("ruleName", rule.getRuleName());
+    item.put("sourceFormat", rule.getSourceFormat());
+    item.put("runtimeFormat", rule.getRuntimeFormat());
+    item.put("cueSource", rule.getCueSource());
+    item.put("runtimeSnapshotJson", rule.getRuntimeSnapshotJson());
+    item.put("checksum", rule.getChecksum());
+    item.put("priority", rule.getPriority());
+    item.put("enabled", rule.getEnabled());
+    item.put("status", rule.getStatus());
+    item.put("draftVersion", rule.getDraftVersion());
+    item.put("updatedAt", text(rule.getUpdatedAt()));
+    item.put("rowVersion", rule.getRowVersion());
+    item.put("limitType", detail.getLimitType());
+    item.put("limitAlgorithm", detail.getLimitAlgorithm());
+    item.put("executionLocation", executionLocation);
+    item.put("coordinationMode", coordinationMode);
+    item.put(
+        "enforcementMode",
+        RateLimitRuleModeSupport.toLegacyEnforcementMode(executionLocation, coordinationMode));
+    item.put("targetSelector", detail.getTargetSelector());
+    item.put("dimensions", detail.getDimensions());
+    item.put("quotaConfig", detail.getQuotaConfig());
+    item.put("windowConfig", detail.getWindowConfig());
+    item.put("burstConfig", detail.getBurstConfig());
+    item.put("modelLimitConfig", detail.getModelLimitConfig());
+    item.put("fallbackPolicy", detail.getFallbackPolicy());
+    item.put("responsePolicy", detail.getResponsePolicy());
+    item.put("detailUpdatedAt", text(detail.getUpdatedAt()));
+    return item;
   }
 
   private List<DistributedRateLimitRuleConfigResponse> buildDistributedRateLimitConfigs(
       List<GovernanceRuleEntity> rules,
       Map<UUID, ApplicationEntity> applicationById,
       long snapshotVersion,
-      OffsetDateTime generatedAt) {
-    Map<UUID, List<GovernanceRuleEntity>> rulesByApplication =
-        rules.stream()
-            .collect(
-                Collectors.groupingBy(
-                    GovernanceRuleEntity::getApplicationId,
-                    LinkedHashMap::new,
-                    Collectors.toList()));
+      OffsetDateTime generatedAt,
+      CacheState current,
+      Map<String, String> sourceChecksumByConfigId) {
+    Map<UUID, List<GovernanceRuleEntity>> rulesByApplication = rulesByApplication(rules);
     List<DistributedRateLimitRuleConfigResponse> configs = new ArrayList<>();
     for (Map.Entry<UUID, List<GovernanceRuleEntity>> entry : rulesByApplication.entrySet()) {
       ApplicationEntity application = applicationById.get(entry.getKey());
+      String configId = rateLimitConfigId(application);
+      DistributedRateLimitRuleConfigResponse existing = current.configById().get(configId);
+      if (existing != null
+          && Objects.equals(
+              current.sourceChecksumByConfigId().get(configId),
+              sourceChecksumByConfigId.get(configId))) {
+        configs.add(existing);
+        continue;
+      }
       List<CompiledGovernanceRule> compiledRules = compileRules(entry.getValue(), application);
       AggregatedGovernanceRuleConfig config =
           governanceRuleAggregatePayloadBuilder
@@ -388,6 +500,22 @@ public class DistributedRateLimitRuleRuntimeUseCase {
       }
     }
     return configs;
+  }
+
+  private Map<UUID, List<GovernanceRuleEntity>> rulesByApplication(
+      List<GovernanceRuleEntity> rules) {
+    return rules.stream()
+        .collect(
+            Collectors.groupingBy(
+                GovernanceRuleEntity::getApplicationId, LinkedHashMap::new, Collectors.toList()));
+  }
+
+  private String rateLimitConfigId(ApplicationEntity application) {
+    return "stellorbit." + normalize(application.getApplicationCode()) + ".rate_limit";
+  }
+
+  private String normalize(String value) {
+    return value.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9_.-]", "-");
   }
 
   private List<CompiledGovernanceRule> compileRules(
@@ -430,6 +558,62 @@ public class DistributedRateLimitRuleRuntimeUseCase {
     return sha256(toJson(items));
   }
 
+  private List<DistributedRateLimitRuleConfigChangeResponse> configChanges(
+      CacheState current,
+      Map<String, DistributedRateLimitRuleConfigResponse> nextConfigById,
+      Map<String, String> nextSourceChecksumByConfigId,
+      long nextVersion) {
+    List<DistributedRateLimitRuleConfigChangeResponse> changes = new ArrayList<>();
+    for (DistributedRateLimitRuleConfigResponse nextConfig : nextConfigById.values()) {
+      DistributedRateLimitRuleConfigResponse previousConfig =
+          current.configById().get(nextConfig.configId());
+      if (previousConfig == null
+          || !Objects.equals(
+              current.sourceChecksumByConfigId().get(nextConfig.configId()),
+              nextSourceChecksumByConfigId.get(nextConfig.configId()))) {
+        changes.add(
+            new DistributedRateLimitRuleConfigChangeResponse(
+                UPSERT_CONFIG,
+                current.snapshotVersion(),
+                nextVersion,
+                nextConfig.instanceSpaceId(),
+                nextConfig.applicationId(),
+                nextConfig.applicationCode(),
+                nextConfig.configId(),
+                previousConfig == null ? null : previousConfig.checksum(),
+                nextConfig.checksum(),
+                nextConfig));
+      }
+    }
+    for (DistributedRateLimitRuleConfigResponse previousConfig : current.configs()) {
+      if (!nextConfigById.containsKey(previousConfig.configId())) {
+        changes.add(
+            new DistributedRateLimitRuleConfigChangeResponse(
+                DELETE_CONFIG,
+                current.snapshotVersion(),
+                nextVersion,
+                previousConfig.instanceSpaceId(),
+                previousConfig.applicationId(),
+                previousConfig.applicationCode(),
+                previousConfig.configId(),
+                previousConfig.checksum(),
+                null,
+                null));
+      }
+    }
+    return changes;
+  }
+
+  private List<ChangeBatch> appendChangeLog(List<ChangeBatch> changeLog, ChangeBatch changeBatch) {
+    if (changeBatch.changes().isEmpty()) {
+      return changeLog;
+    }
+    List<ChangeBatch> nextChangeLog = new ArrayList<>(changeLog);
+    nextChangeLog.add(changeBatch);
+    int fromIndex = Math.max(0, nextChangeLog.size() - MAX_CHANGE_LOG_SIZE);
+    return List.copyOf(nextChangeLog.subList(fromIndex, nextChangeLog.size()));
+  }
+
   private String toJson(Object value) {
     try {
       return canonicalObjectMapper.writeValueAsString(value);
@@ -467,10 +651,20 @@ public class DistributedRateLimitRuleRuntimeUseCase {
       OffsetDateTime generatedAt,
       int totalRuleCount,
       List<DistributedRateLimitRuleConfigResponse> configs,
-      Map<String, DistributedRateLimitRuleConfigResponse> configById) {
+      Map<String, DistributedRateLimitRuleConfigResponse> configById,
+      Map<String, String> sourceChecksumByConfigId,
+      List<ChangeBatch> changeLog) {
 
     private static CacheState empty() {
-      return new CacheState(0L, null, "", null, 0, List.of(), Map.of());
+      return new CacheState(0L, null, "", null, 0, List.of(), Map.of(), Map.of(), List.of());
     }
   }
+
+  private record ChangeBatch(
+      long fromSnapshotVersion,
+      long toSnapshotVersion,
+      String fromChecksum,
+      String toChecksum,
+      OffsetDateTime generatedAt,
+      List<DistributedRateLimitRuleConfigChangeResponse> changes) {}
 }

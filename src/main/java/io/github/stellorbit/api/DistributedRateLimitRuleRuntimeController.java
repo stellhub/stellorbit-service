@@ -1,5 +1,6 @@
 package io.github.stellorbit.api;
 
+import io.github.stellorbit.api.dto.DistributedRateLimitRuleDeltaResponse;
 import io.github.stellorbit.api.dto.DistributedRateLimitRuleSnapshotResponse;
 import io.github.stellorbit.api.dto.DistributedRateLimitRuleWatchEventResponse;
 import io.github.stellorbit.application.usecase.DistributedRateLimitRuleRuntimeUseCase;
@@ -34,13 +35,22 @@ public class DistributedRateLimitRuleRuntimeController {
     return distributedRateLimitRuleRuntimeUseCase.snapshot(page, size);
   }
 
+  /** 按当前快照水位拉取分布式限流规则增量，水位过旧时调用方应重新执行分页全量同步。 */
+  @GetMapping("/changes")
+  public DistributedRateLimitRuleDeltaResponse changes(
+      @RequestParam Long currentSnapshotVersion,
+      @RequestParam(required = false) String currentChecksum) {
+    return distributedRateLimitRuleRuntimeUseCase.deltaSince(
+        currentSnapshotVersion, currentChecksum);
+  }
+
   /** 查询分布式限流规则全量内存缓存指标，用于确认本实例的Caffeine缓存状态。 */
   @GetMapping("/cache/telemetry")
   public Map<String, Object> cacheTelemetry() {
     return distributedRateLimitRuleRuntimeUseCase.cacheTelemetry();
   }
 
-  /** 监听分布式限流规则快照变更，发生变化时通过SSE返回完整内存快照。 */
+  /** 监听分布式限流规则快照变更，发生变化时通过SSE返回配置级增量。 */
   @GetMapping(value = "/watch", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
   public SseEmitter watch(
       @RequestParam(required = false) Long currentSnapshotVersion,
@@ -57,25 +67,44 @@ public class DistributedRateLimitRuleRuntimeController {
     String seenChecksum = currentChecksum;
     try {
       for (int index = 0; index < 30; index++) {
-        if (distributedRateLimitRuleRuntimeUseCase.changedSince(
+        if (distributedRateLimitRuleRuntimeUseCase.requiresFullSync(
             seenSnapshotVersion, seenChecksum)) {
-          DistributedRateLimitRuleSnapshotResponse snapshot =
-              distributedRateLimitRuleRuntimeUseCase.fullSnapshot();
           DistributedRateLimitRuleWatchEventResponse event =
               new DistributedRateLimitRuleWatchEventResponse(
                   "distributed-rate-limit:"
-                      + snapshot.snapshotVersion()
+                      + distributedRateLimitRuleRuntimeUseCase.latestSnapshotVersion()
                       + ":"
-                      + snapshot.checksum(),
-                  "SNAPSHOT_CHANGED",
+                      + distributedRateLimitRuleRuntimeUseCase.latestChecksum()
+                      + ":full-sync-required",
+                  "FULL_SYNC_REQUIRED",
                   seenSnapshotVersion,
-                  snapshot.snapshotVersion(),
-                  snapshot.checksum(),
+                  distributedRateLimitRuleRuntimeUseCase.latestSnapshotVersion(),
+                  distributedRateLimitRuleRuntimeUseCase.latestChecksum(),
                   OffsetDateTime.now(),
-                  snapshot);
-          emitter.send(SseEmitter.event().id(event.eventId()).name("snapshot").data(event));
-          seenSnapshotVersion = snapshot.snapshotVersion();
-          seenChecksum = snapshot.checksum();
+                  null,
+                  null);
+          emitter.send(
+              SseEmitter.event().id(event.eventId()).name("full-sync-required").data(event));
+          emitter.complete();
+          return;
+        }
+        if (distributedRateLimitRuleRuntimeUseCase.changedSince(
+            seenSnapshotVersion, seenChecksum)) {
+          DistributedRateLimitRuleDeltaResponse delta =
+              distributedRateLimitRuleRuntimeUseCase.deltaSince(seenSnapshotVersion, seenChecksum);
+          DistributedRateLimitRuleWatchEventResponse event =
+              new DistributedRateLimitRuleWatchEventResponse(
+                  "distributed-rate-limit:" + delta.toSnapshotVersion() + ":" + delta.toChecksum(),
+                  "DELTA_CHANGED",
+                  seenSnapshotVersion,
+                  delta.toSnapshotVersion(),
+                  delta.toChecksum(),
+                  OffsetDateTime.now(),
+                  delta,
+                  null);
+          emitter.send(SseEmitter.event().id(event.eventId()).name("delta").data(event));
+          seenSnapshotVersion = delta.toSnapshotVersion();
+          seenChecksum = delta.toChecksum();
         } else {
           OffsetDateTime generatedAt = OffsetDateTime.now();
           DistributedRateLimitRuleWatchEventResponse event =
@@ -86,6 +115,7 @@ public class DistributedRateLimitRuleRuntimeController {
                   distributedRateLimitRuleRuntimeUseCase.latestSnapshotVersion(),
                   distributedRateLimitRuleRuntimeUseCase.latestChecksum(),
                   generatedAt,
+                  null,
                   null);
           emitter.send(SseEmitter.event().name("heartbeat").data(event));
         }

@@ -9,4 +9,5 @@ public record DistributedRateLimitRuleWatchEventResponse(
     Long latestSnapshotVersion,
     String latestChecksum,
     OffsetDateTime generatedAt,
+    DistributedRateLimitRuleDeltaResponse delta,
     DistributedRateLimitRuleSnapshotResponse snapshot) {}

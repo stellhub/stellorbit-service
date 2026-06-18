@@ -9,6 +9,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.stellflux.caffeine.StellfluxCaffeineCacheFactory;
 import io.github.stellflux.opentelemetry.StellfluxOpenTelemetryConfig;
 import io.github.stellorbit.api.dto.DistributedRateLimitRuleConfigResponse;
+import io.github.stellorbit.api.dto.DistributedRateLimitRuleDeltaResponse;
 import io.github.stellorbit.api.dto.DistributedRateLimitRuleSnapshotResponse;
 import io.github.stellorbit.application.port.CompiledGovernanceRule;
 import io.github.stellorbit.application.port.GovernanceRuleAggregatePayloadBuilder;
@@ -140,6 +141,69 @@ class DistributedRateLimitRuleRuntimeUseCaseTest {
         .containsEntry("totalRules", 2);
   }
 
+  @Test
+  void shouldReturnOnlyChangedConfigInDeltaAfterInitialFullSnapshot() throws Exception {
+    UUID instanceSpaceId = UUID.randomUUID();
+    ApplicationEntity orderApplication =
+        application(instanceSpaceId, UUID.randomUUID(), "order-service");
+    ApplicationEntity payApplication =
+        application(instanceSpaceId, UUID.randomUUID(), "pay-service");
+    GovernanceRuleEntity orderRule =
+        rateLimitRule(orderApplication, UUID.randomUUID(), "order-global-quota", 10);
+    GovernanceRuleEntity payRule =
+        rateLimitRule(payApplication, UUID.randomUUID(), "pay-global-quota", 20);
+
+    when(governanceRuleRepository.findEnabledDistributedRateLimitRules())
+        .thenReturn(List.of(orderRule, payRule), List.of(orderRule, payRule));
+    when(rateLimitRuleRepository.findAllById(any()))
+        .thenReturn(
+            List.of(
+                rateLimitDetail(orderRule.getId(), 1000), rateLimitDetail(payRule.getId(), 1000)),
+            List.of(
+                rateLimitDetail(orderRule.getId(), 2000), rateLimitDetail(payRule.getId(), 1000)));
+    when(applicationRepository.findAllById(any()))
+        .thenReturn(List.of(orderApplication, payApplication));
+    when(governanceRuleContentCompiler.compile(orderRule, orderApplication))
+        .thenReturn(
+            compiledRule(orderRule, orderApplication, 1000),
+            compiledRule(orderRule, orderApplication, 2000));
+    when(governanceRuleContentCompiler.compile(payRule, payApplication))
+        .thenReturn(compiledRule(payRule, payApplication, 1000));
+
+    assertThat(useCase.refreshIfChanged()).isTrue();
+    DistributedRateLimitRuleSnapshotResponse baseline = useCase.snapshot(0, 10);
+
+    assertThat(useCase.refreshIfChanged()).isTrue();
+    DistributedRateLimitRuleDeltaResponse delta =
+        useCase.deltaSince(baseline.snapshotVersion(), baseline.checksum());
+
+    assertThat(delta.fromSnapshotVersion()).isEqualTo(1L);
+    assertThat(delta.toSnapshotVersion()).isEqualTo(2L);
+    assertThat(delta.changeCount()).isEqualTo(1);
+    assertThat(delta.changes()).hasSize(1);
+    assertThat(delta.changes().getFirst().operation()).isEqualTo("UPSERT_CONFIG");
+    assertThat(delta.changes().getFirst().applicationCode()).isEqualTo("order-service");
+    assertThat(delta.changes().getFirst().config()).isNotNull();
+    assertThat(delta.changes().getFirst().previousChecksum()).isNotBlank();
+    assertThat(delta.changes().getFirst().currentChecksum())
+        .isEqualTo(delta.changes().getFirst().config().checksum());
+
+    JsonNode updatedContent = objectMapper.readTree(delta.changes().getFirst().config().content());
+    assertThat(
+            updatedContent
+                .path("rules")
+                .get(0)
+                .path("content")
+                .path("limit")
+                .path("quotaConfig")
+                .path("limit")
+                .asInt())
+        .isEqualTo(2000);
+    assertThat(useCase.requiresFullSync(baseline.snapshotVersion(), baseline.checksum())).isFalse();
+    assertThat(useCase.requiresFullSync(null, null)).isTrue();
+    assertThat(useCase.deltaSince(2L, useCase.latestChecksum()).changeCount()).isZero();
+  }
+
   private ApplicationEntity application(UUID instanceSpaceId, UUID applicationId, String code) {
     ApplicationEntity application = new ApplicationEntity();
     application.setId(applicationId);
@@ -174,6 +238,10 @@ class DistributedRateLimitRuleRuntimeUseCaseTest {
   }
 
   private RateLimitRuleEntity rateLimitDetail(UUID ruleId) {
+    return rateLimitDetail(ruleId, 1000);
+  }
+
+  private RateLimitRuleEntity rateLimitDetail(UUID ruleId, int quotaLimit) {
     RateLimitRuleEntity detail = new RateLimitRuleEntity();
     detail.setId(ruleId);
     detail.setLimitType("REQUEST");
@@ -183,7 +251,7 @@ class DistributedRateLimitRuleRuntimeUseCaseTest {
     detail.setEnforcementMode("GLOBAL_QUOTA");
     detail.setTargetSelector(Map.of("path", "/api/orders"));
     detail.setDimensions(List.of(Map.of("key", "tenantId")));
-    detail.setQuotaConfig(Map.of("limit", 1000));
+    detail.setQuotaConfig(Map.of("limit", quotaLimit));
     detail.setWindowConfig(Map.of("seconds", 60));
     detail.setBurstConfig(new LinkedHashMap<>());
     detail.setModelLimitConfig(new LinkedHashMap<>());
@@ -194,6 +262,11 @@ class DistributedRateLimitRuleRuntimeUseCaseTest {
 
   private CompiledGovernanceRule compiledRule(
       GovernanceRuleEntity rule, ApplicationEntity application) {
+    return compiledRule(rule, application, 1000);
+  }
+
+  private CompiledGovernanceRule compiledRule(
+      GovernanceRuleEntity rule, ApplicationEntity application, int quotaLimit) {
     Map<String, Object> limit = new LinkedHashMap<>();
     limit.put("limitType", "REQUEST");
     limit.put("limitAlgorithm", "TOKEN_BUCKET");
@@ -203,7 +276,7 @@ class DistributedRateLimitRuleRuntimeUseCaseTest {
     limit.put("distributedCoordination", true);
     limit.put("targetSelector", Map.of("path", "/api/orders"));
     limit.put("dimensions", List.of(Map.of("key", "tenantId")));
-    limit.put("quotaConfig", Map.of("limit", 1000));
+    limit.put("quotaConfig", Map.of("limit", quotaLimit));
     limit.put("windowConfig", Map.of("seconds", 60));
     limit.put("fallbackPolicy", Map.of("mode", "FAIL_OPEN"));
     limit.put("responsePolicy", Map.of("status", 429));
