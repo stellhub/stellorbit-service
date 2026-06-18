@@ -55,7 +55,8 @@ public class GovernanceRuleConflictDetector {
       case "RATE_LIMIT" -> {
         Map<String, Object> limit = (Map<String, Object>) model.getOrDefault("limit", Map.of());
         yield List.of(
-            limit.get("enforcementMode"),
+            limit.get("executionLocation"),
+            limit.get("coordinationMode"),
             limit.get("targetSelector"),
             limit.get("dimensions"),
             limit.get("windowConfig"));

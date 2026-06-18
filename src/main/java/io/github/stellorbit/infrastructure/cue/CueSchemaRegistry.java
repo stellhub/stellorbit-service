@@ -139,7 +139,10 @@ public class CueSchemaRegistry {
     limit: {
       limitType: #NonEmptyString
       limitAlgorithm: #NonEmptyString
-      enforcementMode: *"LOCAL" | "LOCAL" | "GLOBAL_SYNC" | "GLOBAL_QUOTA"
+      executionLocation: *"APPLICATION" | "APPLICATION" | "SIDECAR" | "GATEWAY" | "EDGE"
+      coordinationMode: *"LOCAL_ONLY" | "LOCAL_ONLY" | "GLOBAL_SYNC" | "GLOBAL_QUOTA"
+      enforcementMode?: "LOCAL" | "GLOBAL_SYNC" | "GLOBAL_QUOTA" | "EDGE"
+      distributedCoordination: *false | bool
       targetSelector: #Object
       dimensions: [...#NonEmptyString]
       quotaConfig: #Object

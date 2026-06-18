@@ -9,6 +9,8 @@ public record RateLimitRuleDetailRequest(
     UUID id,
     @NotBlank(message = "限流类型不能为空") String limitType,
     @NotBlank(message = "限流算法不能为空") String limitAlgorithm,
+    String executionLocation,
+    String coordinationMode,
     String enforcementMode,
     Map<String, Object> targetSelector,
     List<Object> dimensions,

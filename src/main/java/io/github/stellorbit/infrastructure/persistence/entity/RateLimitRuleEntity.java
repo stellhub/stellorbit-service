@@ -40,6 +40,12 @@ public class RateLimitRuleEntity implements Identifiable {
   @Column(name = "enforcement_mode", nullable = false, length = 48)
   private String enforcementMode = "LOCAL";
 
+  @Column(name = "execution_location", nullable = false, length = 48)
+  private String executionLocation = "APPLICATION";
+
+  @Column(name = "coordination_mode", nullable = false, length = 48)
+  private String coordinationMode = "LOCAL_ONLY";
+
   @JdbcTypeCode(SqlTypes.JSON)
   @Column(name = "target_selector", nullable = false, columnDefinition = "jsonb")
   private Map<String, Object> targetSelector = new LinkedHashMap<>();

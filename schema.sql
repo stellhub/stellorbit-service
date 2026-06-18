@@ -210,6 +210,8 @@ CREATE TABLE rate_limit_rules (
     limit_type VARCHAR(48) NOT NULL,
     limit_algorithm VARCHAR(48) NOT NULL,
     enforcement_mode VARCHAR(48) NOT NULL DEFAULT 'LOCAL',
+    execution_location VARCHAR(48) NOT NULL DEFAULT 'APPLICATION',
+    coordination_mode VARCHAR(48) NOT NULL DEFAULT 'LOCAL_ONLY',
     target_selector JSONB NOT NULL DEFAULT '{}'::JSONB,
     dimensions JSONB NOT NULL DEFAULT '[]'::JSONB,
     quota_config JSONB NOT NULL DEFAULT '{}'::JSONB,
@@ -223,6 +225,8 @@ CREATE TABLE rate_limit_rules (
     CONSTRAINT ck_rate_limit_rules_type CHECK (limit_type IN ('REQUEST', 'CONNECTION', 'BYTE', 'TENANT', 'USER', 'CALLER', 'API_KEY', 'RESOURCE', 'MODEL_REQUEST', 'MODEL_TOKEN', 'MODEL_COST', 'MODEL_CONCURRENCY')),
     CONSTRAINT ck_rate_limit_rules_algorithm CHECK (limit_algorithm IN ('TOKEN_BUCKET', 'LEAKY_BUCKET', 'FIXED_WINDOW', 'SLIDING_WINDOW', 'QUOTA_LEASE')),
     CONSTRAINT ck_rate_limit_rules_mode CHECK (enforcement_mode IN ('LOCAL', 'GLOBAL_SYNC', 'GLOBAL_QUOTA', 'EDGE')),
+    CONSTRAINT ck_rate_limit_rules_execution_location CHECK (execution_location IN ('APPLICATION', 'SIDECAR', 'GATEWAY', 'EDGE')),
+    CONSTRAINT ck_rate_limit_rules_coordination_mode CHECK (coordination_mode IN ('LOCAL_ONLY', 'GLOBAL_SYNC', 'GLOBAL_QUOTA')),
     CONSTRAINT ck_rate_limit_rules_target_object CHECK (jsonb_typeof(target_selector) = 'object'),
     CONSTRAINT ck_rate_limit_rules_dimensions_array CHECK (jsonb_typeof(dimensions) = 'array'),
     CONSTRAINT ck_rate_limit_rules_quota_object CHECK (jsonb_typeof(quota_config) = 'object'),
@@ -230,7 +234,7 @@ CREATE TABLE rate_limit_rules (
     CONSTRAINT ck_rate_limit_rules_model_object CHECK (jsonb_typeof(model_limit_config) = 'object')
 );
 
-COMMENT ON TABLE rate_limit_rules IS 'Typed rate limit rules including local, global, quota lease and model application limits.';
+COMMENT ON TABLE rate_limit_rules IS 'Typed rate limit rules including application, sidecar, gateway, edge, global sync, quota lease and model application limits.';
 
 CREATE TABLE auth_policy_rules (
     governance_rule_id UUID PRIMARY KEY REFERENCES governance_rules (id) ON DELETE CASCADE,
@@ -861,6 +865,7 @@ CREATE INDEX idx_breaker_rules_type_protocol ON breaker_rules (breaker_type, pro
 CREATE INDEX idx_breaker_rules_target_gin ON breaker_rules USING GIN (target_selector);
 
 CREATE INDEX idx_rate_limit_rules_type_mode ON rate_limit_rules (limit_type, enforcement_mode);
+CREATE INDEX idx_rate_limit_rules_type_execution_coordination ON rate_limit_rules (limit_type, execution_location, coordination_mode);
 CREATE INDEX idx_rate_limit_rules_dimensions_gin ON rate_limit_rules USING GIN (dimensions);
 CREATE INDEX idx_rate_limit_rules_model_gin ON rate_limit_rules USING GIN (model_limit_config);
 CREATE INDEX idx_auth_policy_rules_type_action ON auth_policy_rules (auth_policy_type, auth_action);

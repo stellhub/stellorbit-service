@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import io.github.stellorbit.api.error.InvalidRuleRequestException;
 import io.github.stellorbit.application.port.CompiledGovernanceRule;
 import io.github.stellorbit.application.port.GovernanceRuleContentCompiler;
+import io.github.stellorbit.domain.RateLimitRuleModeSupport;
 import io.github.stellorbit.infrastructure.cue.CueCompilationResult;
 import io.github.stellorbit.infrastructure.cue.CueRuleCompiler;
 import io.github.stellorbit.infrastructure.persistence.entity.ApplicationEntity;
@@ -160,9 +161,22 @@ public class StructuredGovernanceRuleContentCompiler implements GovernanceRuleCo
             .findById(rule.getId())
             .orElseThrow(() -> new InvalidRuleRequestException("限流规则明细不存在"));
     Map<String, Object> content = new LinkedHashMap<>();
+    String executionLocation =
+        RateLimitRuleModeSupport.normalizeExecutionLocation(
+            detail.getExecutionLocation(), detail.getEnforcementMode());
+    String coordinationMode =
+        RateLimitRuleModeSupport.normalizeCoordinationMode(
+            detail.getCoordinationMode(), detail.getEnforcementMode());
     content.put("limitType", detail.getLimitType());
     content.put("limitAlgorithm", detail.getLimitAlgorithm());
-    content.put("enforcementMode", detail.getEnforcementMode());
+    content.put("executionLocation", executionLocation);
+    content.put("coordinationMode", coordinationMode);
+    content.put(
+        "enforcementMode",
+        RateLimitRuleModeSupport.toLegacyEnforcementMode(executionLocation, coordinationMode));
+    content.put(
+        "distributedCoordination",
+        RateLimitRuleModeSupport.isDistributedCoordination(coordinationMode));
     content.put("targetSelector", detail.getTargetSelector());
     content.put("dimensions", detail.getDimensions());
     content.put("quotaConfig", detail.getQuotaConfig());

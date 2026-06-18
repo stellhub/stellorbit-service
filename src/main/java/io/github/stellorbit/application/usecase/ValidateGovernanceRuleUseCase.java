@@ -5,6 +5,7 @@ import io.github.stellorbit.api.error.ResourceNotFoundException;
 import io.github.stellorbit.api.security.ControlPlaneSecurityContextHolder;
 import io.github.stellorbit.application.port.CompiledGovernanceRule;
 import io.github.stellorbit.application.port.GovernanceRuleContentCompiler;
+import io.github.stellorbit.domain.RateLimitRuleModeSupport;
 import io.github.stellorbit.infrastructure.persistence.entity.ApplicationEntity;
 import io.github.stellorbit.infrastructure.persistence.entity.AuthRuleCertificateEntity;
 import io.github.stellorbit.infrastructure.persistence.entity.GovernanceRuleEntity;
@@ -174,8 +175,21 @@ public class ValidateGovernanceRuleUseCase {
       errors.add("限流规则明细不存在");
       return;
     }
-    if ("GLOBAL_QUOTA".equals(detailRule.getEnforcementMode())) {
+    String executionLocation =
+        RateLimitRuleModeSupport.normalizeExecutionLocation(
+            detailRule.getExecutionLocation(), detailRule.getEnforcementMode());
+    String coordinationMode =
+        RateLimitRuleModeSupport.normalizeCoordinationMode(
+            detailRule.getCoordinationMode(), detailRule.getEnforcementMode());
+    if (RateLimitRuleModeSupport.COORDINATION_MODE_GLOBAL_QUOTA.equals(coordinationMode)) {
       warnings.add("GLOBAL_QUOTA运行时配额由外部分布式限流服务承载，本项目仅发布限流规则");
+    }
+    if (RateLimitRuleModeSupport.COORDINATION_MODE_GLOBAL_SYNC.equals(coordinationMode)) {
+      warnings.add("GLOBAL_SYNC运行时全局同步判定由外部分布式限流服务承载，本项目仅发布限流规则");
+    }
+    if (RateLimitRuleModeSupport.EXECUTION_LOCATION_EDGE.equals(executionLocation)
+        && RateLimitRuleModeSupport.COORDINATION_MODE_LOCAL_ONLY.equals(coordinationMode)) {
+      warnings.add("EDGE表示规则在网关或边缘代理侧执行，不代表必须接入分布式限流服务端");
     }
   }
 

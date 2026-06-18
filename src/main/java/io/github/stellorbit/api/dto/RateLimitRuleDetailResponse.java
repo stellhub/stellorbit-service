@@ -9,6 +9,8 @@ public record RateLimitRuleDetailResponse(
     UUID id,
     String limitType,
     String limitAlgorithm,
+    String executionLocation,
+    String coordinationMode,
     String enforcementMode,
     Map<String, Object> targetSelector,
     List<Object> dimensions,
