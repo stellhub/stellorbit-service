@@ -104,6 +104,18 @@ class DistributedRateLimitRuleRuntimeUseCaseTest {
     assertThat(content.path("rules")).hasSize(1);
     assertThat(content.path("limit")).hasSize(1);
     assertThat(
+            content.path("rules").get(0).path("content").path("limit").path("limitMode").asText())
+        .isEqualTo("QPS");
+    assertThat(
+            content
+                .path("rules")
+                .get(0)
+                .path("content")
+                .path("limit")
+                .path("trafficProtocol")
+                .asText())
+        .isEqualTo("HTTP");
+    assertThat(
             content
                 .path("rules")
                 .get(0)
@@ -130,6 +142,15 @@ class DistributedRateLimitRuleRuntimeUseCaseTest {
                 .path("enforcementMode")
                 .asText())
         .isEqualTo("GLOBAL_QUOTA");
+    assertThat(
+            content
+                .path("rules")
+                .get(0)
+                .path("content")
+                .path("limit")
+                .path("keyExtractor")
+                .path("keys"))
+        .hasSize(1);
 
     assertThat(useCase.refreshIfChanged()).isFalse();
     assertThat(useCase.snapshot(0, 10).snapshotVersion()).isEqualTo(1L);
@@ -244,19 +265,34 @@ class DistributedRateLimitRuleRuntimeUseCaseTest {
   private RateLimitRuleEntity rateLimitDetail(UUID ruleId, int quotaLimit) {
     RateLimitRuleEntity detail = new RateLimitRuleEntity();
     detail.setId(ruleId);
+    detail.setLimitMode("QPS");
     detail.setLimitType("REQUEST");
     detail.setLimitAlgorithm("TOKEN_BUCKET");
+    detail.setTrafficProtocol("HTTP");
     detail.setExecutionLocation("APPLICATION");
     detail.setCoordinationMode("GLOBAL_QUOTA");
     detail.setEnforcementMode("GLOBAL_QUOTA");
     detail.setTargetSelector(Map.of("path", "/api/orders"));
-    detail.setDimensions(List.of(Map.of("key", "tenantId")));
-    detail.setQuotaConfig(Map.of("limit", quotaLimit));
-    detail.setWindowConfig(Map.of("seconds", 60));
+    detail.setRequestMatcher(Map.of("http", Map.of("method", "GET", "path", "/api/orders")));
+    detail.setKeyExtractor(
+        Map.of(
+            "strategy",
+            "COMPOSITE",
+            "keys",
+            List.of(Map.of("name", "tenant", "source", "HEADER", "key", "x-tenant-id"))));
+    detail.setDimensions(
+        List.of(Map.of("name", "tenant", "source", "HEADER", "key", "x-tenant-id")));
+    detail.setQuotaConfig(Map.of("limit", quotaLimit, "unit", "REQUEST", "period", "SECOND"));
+    detail.setWindowConfig(Map.of("windowType", "SLIDING", "durationMillis", 60000));
     detail.setBurstConfig(new LinkedHashMap<>());
+    detail.setConcurrencyConfig(Map.of("maxConcurrent", 100));
+    detail.setHotspotConfig(Map.of("enabled", true, "topN", 100, "threshold", 1000));
+    detail.setCustomPolicy(Map.of("policyType", "EXPRESSION", "expression", "request.tenant"));
     detail.setModelLimitConfig(new LinkedHashMap<>());
     detail.setFallbackPolicy(Map.of("mode", "FAIL_OPEN"));
     detail.setResponsePolicy(Map.of("status", 429));
+    detail.setObservabilityConfig(Map.of("metricLabels", List.of("tenant")));
+    detail.setShadowConfig(Map.of("enabled", false));
     return detail;
   }
 
@@ -268,18 +304,34 @@ class DistributedRateLimitRuleRuntimeUseCaseTest {
   private CompiledGovernanceRule compiledRule(
       GovernanceRuleEntity rule, ApplicationEntity application, int quotaLimit) {
     Map<String, Object> limit = new LinkedHashMap<>();
+    limit.put("limitMode", "QPS");
     limit.put("limitType", "REQUEST");
     limit.put("limitAlgorithm", "TOKEN_BUCKET");
+    limit.put("trafficProtocol", "HTTP");
     limit.put("executionLocation", "APPLICATION");
     limit.put("coordinationMode", "GLOBAL_QUOTA");
     limit.put("enforcementMode", "GLOBAL_QUOTA");
     limit.put("distributedCoordination", true);
     limit.put("targetSelector", Map.of("path", "/api/orders"));
-    limit.put("dimensions", List.of(Map.of("key", "tenantId")));
-    limit.put("quotaConfig", Map.of("limit", quotaLimit));
-    limit.put("windowConfig", Map.of("seconds", 60));
+    limit.put("requestMatcher", Map.of("http", Map.of("method", "GET", "path", "/api/orders")));
+    limit.put(
+        "keyExtractor",
+        Map.of(
+            "strategy",
+            "COMPOSITE",
+            "keys",
+            List.of(Map.of("name", "tenant", "source", "HEADER", "key", "x-tenant-id"))));
+    limit.put(
+        "dimensions", List.of(Map.of("name", "tenant", "source", "HEADER", "key", "x-tenant-id")));
+    limit.put("quotaConfig", Map.of("limit", quotaLimit, "unit", "REQUEST", "period", "SECOND"));
+    limit.put("windowConfig", Map.of("windowType", "SLIDING", "durationMillis", 60000));
+    limit.put("concurrencyConfig", Map.of("maxConcurrent", 100));
+    limit.put("hotspotConfig", Map.of("enabled", true, "topN", 100, "threshold", 1000));
+    limit.put("customPolicy", Map.of("policyType", "EXPRESSION", "expression", "request.tenant"));
     limit.put("fallbackPolicy", Map.of("mode", "FAIL_OPEN"));
     limit.put("responsePolicy", Map.of("status", 429));
+    limit.put("observabilityConfig", Map.of("metricLabels", List.of("tenant")));
+    limit.put("shadowConfig", Map.of("enabled", false));
 
     Map<String, Object> content = new LinkedHashMap<>();
     content.put("ruleType", "RATE_LIMIT");

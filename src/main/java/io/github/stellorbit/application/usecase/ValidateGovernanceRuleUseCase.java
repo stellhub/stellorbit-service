@@ -5,7 +5,9 @@ import io.github.stellorbit.api.error.ResourceNotFoundException;
 import io.github.stellorbit.api.security.ControlPlaneSecurityContextHolder;
 import io.github.stellorbit.application.port.CompiledGovernanceRule;
 import io.github.stellorbit.application.port.GovernanceRuleContentCompiler;
+import io.github.stellorbit.application.support.RateLimitRuleModelMapper;
 import io.github.stellorbit.domain.RateLimitRuleModeSupport;
+import io.github.stellorbit.domain.RateLimitRuleModelSupport;
 import io.github.stellorbit.infrastructure.persistence.entity.ApplicationEntity;
 import io.github.stellorbit.infrastructure.persistence.entity.AuthRuleCertificateEntity;
 import io.github.stellorbit.infrastructure.persistence.entity.GovernanceRuleEntity;
@@ -191,6 +193,11 @@ public class ValidateGovernanceRuleUseCase {
         && RateLimitRuleModeSupport.COORDINATION_MODE_LOCAL_ONLY.equals(coordinationMode)) {
       warnings.add("EDGE表示规则在网关或边缘代理侧执行，不代表必须接入分布式限流服务端");
     }
+    RateLimitRuleModelSupport.ValidationResult modelValidation =
+        RateLimitRuleModelSupport.validate(
+            RateLimitRuleModelMapper.fromEntity(detailRule, coordinationMode));
+    errors.addAll(modelValidation.errors());
+    warnings.addAll(modelValidation.warnings());
   }
 
   private void validateAuthRule(UUID ruleId, List<String> errors, List<String> warnings) {

@@ -77,6 +77,62 @@ CREATE TABLE applications (
 
 COMMENT ON TABLE applications IS 'Governance target applications under an instance space.';
 
+CREATE TABLE rule_releases (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id VARCHAR(120) NOT NULL,
+    instance_space_id UUID NOT NULL REFERENCES instance_spaces (id) ON DELETE RESTRICT,
+    application_id UUID NOT NULL REFERENCES applications (id) ON DELETE RESTRICT,
+    release_version BIGINT NOT NULL,
+    release_name VARCHAR(160) NOT NULL,
+    release_status VARCHAR(32) NOT NULL DEFAULT 'CREATED',
+    idempotency_key VARCHAR(160),
+    source_format VARCHAR(32) NOT NULL DEFAULT 'CUE',
+    runtime_format VARCHAR(32) NOT NULL DEFAULT 'JSON',
+    schema_version VARCHAR(64) NOT NULL DEFAULT 'stellorbit.governance.v1',
+    protocol_version VARCHAR(64) NOT NULL DEFAULT 'stellorbit.runtime.protocol.v1',
+    min_client_version VARCHAR(80),
+    max_client_version VARCHAR(80),
+    compatibility_status VARCHAR(32) NOT NULL DEFAULT 'COMPATIBLE',
+    compatibility_messages JSONB NOT NULL DEFAULT '[]'::JSONB,
+    approval_status VARCHAR(32) NOT NULL DEFAULT 'NOT_REQUIRED',
+    release_snapshot_json JSONB,
+    checksum VARCHAR(128) NOT NULL,
+    rollback_from_release_id UUID REFERENCES rule_releases (id) ON DELETE RESTRICT,
+    release_note TEXT,
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    max_retry_count INTEGER NOT NULL DEFAULT 3,
+    failure_details JSONB NOT NULL DEFAULT '[]'::JSONB,
+    recovery_status VARCHAR(32) NOT NULL DEFAULT 'NONE',
+    recovered_by VARCHAR(120),
+    recovered_at TIMESTAMPTZ,
+    recovery_note TEXT,
+    created_by VARCHAR(120) NOT NULL,
+    published_by VARCHAR(120),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    published_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    row_version BIGINT NOT NULL DEFAULT 0,
+    CONSTRAINT uk_rule_releases_version UNIQUE (tenant_id, instance_space_id, application_id, release_version),
+    CONSTRAINT uk_rule_releases_idempotency UNIQUE (tenant_id, instance_space_id, application_id, idempotency_key),
+    CONSTRAINT fk_rule_releases_tenant_space FOREIGN KEY (tenant_id, instance_space_id) REFERENCES instance_spaces (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT fk_rule_releases_tenant_application FOREIGN KEY (tenant_id, application_id) REFERENCES applications (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT ck_rule_releases_status CHECK (release_status IN ('CREATED', 'VALIDATING', 'APPROVAL_PENDING', 'APPROVED', 'REJECTED', 'CANCELED', 'PUBLISHING', 'PARTIAL_PUBLISHED', 'PUBLISHED', 'FAILED', 'ROLLED_BACK')),
+    CONSTRAINT ck_rule_releases_approval_status CHECK (approval_status IN ('NOT_REQUIRED', 'PENDING', 'APPROVED', 'REJECTED', 'CANCELED')),
+    CONSTRAINT ck_rule_releases_compatibility CHECK (compatibility_status IN ('COMPATIBLE', 'INCOMPATIBLE', 'UNKNOWN')),
+    CONSTRAINT ck_rule_releases_compatibility_messages_array CHECK (jsonb_typeof(compatibility_messages) = 'array'),
+    CONSTRAINT ck_rule_releases_source_format CHECK (source_format = 'CUE'),
+    CONSTRAINT ck_rule_releases_runtime_format CHECK (runtime_format = 'JSON'),
+    CONSTRAINT ck_rule_releases_retry CHECK (retry_count >= 0 AND max_retry_count >= 0),
+    CONSTRAINT ck_rule_releases_failure_details_array CHECK (jsonb_typeof(failure_details) = 'array'),
+    CONSTRAINT ck_rule_releases_recovery_status CHECK (recovery_status IN ('NONE', 'MANUAL_RECOVERED')),
+    CONSTRAINT ck_rule_releases_snapshot CHECK (
+        (release_status IN ('CREATED', 'VALIDATING', 'APPROVAL_PENDING', 'APPROVED', 'REJECTED', 'CANCELED', 'FAILED') AND release_snapshot_json IS NULL)
+        OR (runtime_format = 'JSON' AND release_snapshot_json IS NOT NULL)
+    )
+);
+
+COMMENT ON TABLE rule_releases IS 'Published governance release versions and full runtime snapshots.';
+
 CREATE TABLE governance_rules (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id VARCHAR(120) NOT NULL,
@@ -106,6 +162,7 @@ CREATE TABLE governance_rules (
     CONSTRAINT uk_governance_rules_code UNIQUE (tenant_id, instance_space_id, application_id, rule_type, rule_code),
     CONSTRAINT fk_governance_rules_tenant_space FOREIGN KEY (tenant_id, instance_space_id) REFERENCES instance_spaces (tenant_id, id) ON DELETE RESTRICT,
     CONSTRAINT fk_governance_rules_tenant_application FOREIGN KEY (tenant_id, application_id) REFERENCES applications (tenant_id, id) ON DELETE RESTRICT,
+    CONSTRAINT fk_governance_rules_latest_release FOREIGN KEY (latest_release_id) REFERENCES rule_releases (id) ON DELETE SET NULL,
     CONSTRAINT ck_governance_rules_type CHECK (rule_type IN ('ROUTE', 'BREAKER', 'RATE_LIMIT', 'AUTH')),
     CONSTRAINT ck_governance_rules_source_format CHECK (source_format = 'CUE'),
     CONSTRAINT ck_governance_rules_runtime_format CHECK (runtime_format = 'JSON'),
@@ -207,34 +264,94 @@ COMMENT ON TABLE breaker_rules IS 'Typed circuit breaker rule details for connec
 
 CREATE TABLE rate_limit_rules (
     governance_rule_id UUID PRIMARY KEY REFERENCES governance_rules (id) ON DELETE CASCADE,
+    limit_mode VARCHAR(48) NOT NULL DEFAULT 'QPS',
     limit_type VARCHAR(48) NOT NULL,
     limit_algorithm VARCHAR(48) NOT NULL,
+    traffic_protocol VARCHAR(32) NOT NULL DEFAULT 'ANY',
     enforcement_mode VARCHAR(48) NOT NULL DEFAULT 'LOCAL',
     execution_location VARCHAR(48) NOT NULL DEFAULT 'APPLICATION',
     coordination_mode VARCHAR(48) NOT NULL DEFAULT 'LOCAL_ONLY',
     target_selector JSONB NOT NULL DEFAULT '{}'::JSONB,
+    request_matcher JSONB NOT NULL DEFAULT '{}'::JSONB,
+    key_extractor JSONB NOT NULL DEFAULT '{}'::JSONB,
     dimensions JSONB NOT NULL DEFAULT '[]'::JSONB,
     quota_config JSONB NOT NULL DEFAULT '{}'::JSONB,
     window_config JSONB NOT NULL DEFAULT '{}'::JSONB,
     burst_config JSONB NOT NULL DEFAULT '{}'::JSONB,
+    concurrency_config JSONB NOT NULL DEFAULT '{}'::JSONB,
+    hotspot_config JSONB NOT NULL DEFAULT '{}'::JSONB,
+    custom_policy JSONB NOT NULL DEFAULT '{}'::JSONB,
     model_limit_config JSONB NOT NULL DEFAULT '{}'::JSONB,
     fallback_policy JSONB NOT NULL DEFAULT '{}'::JSONB,
     response_policy JSONB NOT NULL DEFAULT '{}'::JSONB,
+    observability_config JSONB NOT NULL DEFAULT '{}'::JSONB,
+    shadow_config JSONB NOT NULL DEFAULT '{}'::JSONB,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT ck_rate_limit_rules_type CHECK (limit_type IN ('REQUEST', 'CONNECTION', 'BYTE', 'TENANT', 'USER', 'CALLER', 'API_KEY', 'RESOURCE', 'MODEL_REQUEST', 'MODEL_TOKEN', 'MODEL_COST', 'MODEL_CONCURRENCY')),
-    CONSTRAINT ck_rate_limit_rules_algorithm CHECK (limit_algorithm IN ('TOKEN_BUCKET', 'LEAKY_BUCKET', 'FIXED_WINDOW', 'SLIDING_WINDOW', 'QUOTA_LEASE')),
+    CONSTRAINT ck_rate_limit_rules_limit_mode CHECK (limit_mode IN ('QPS', 'CONCURRENCY', 'HEADER', 'HOT_KEY', 'CUSTOM', 'QUOTA', 'BANDWIDTH', 'CONNECTION', 'MODEL')),
+    CONSTRAINT ck_rate_limit_rules_type CHECK (limit_type IN ('REQUEST', 'CONNECTION', 'BYTE', 'TENANT', 'USER', 'CALLER', 'API_KEY', 'RESOURCE', 'HEADER', 'GRPC_METADATA', 'IP', 'ENDPOINT', 'METHOD', 'TOPIC', 'MODEL_REQUEST', 'MODEL_TOKEN', 'MODEL_COST', 'MODEL_CONCURRENCY', 'CUSTOM_KEY')),
+    CONSTRAINT ck_rate_limit_rules_algorithm CHECK (limit_algorithm IN ('TOKEN_BUCKET', 'LEAKY_BUCKET', 'FIXED_WINDOW', 'SLIDING_WINDOW', 'QUOTA_LEASE', 'CONCURRENCY_LIMIT', 'HOT_KEY', 'CUSTOM', 'ADAPTIVE')),
+    CONSTRAINT ck_rate_limit_rules_protocol CHECK (traffic_protocol IN ('HTTP', 'GRPC', 'TCP', 'MESSAGE', 'MODEL', 'ANY')),
+    CONSTRAINT ck_rate_limit_rules_limit_mode_algorithm CHECK (
+        (limit_mode = 'QPS' AND limit_algorithm IN ('TOKEN_BUCKET', 'LEAKY_BUCKET', 'FIXED_WINDOW', 'SLIDING_WINDOW', 'ADAPTIVE')) OR
+        (limit_mode = 'CONCURRENCY' AND limit_algorithm IN ('CONCURRENCY_LIMIT', 'ADAPTIVE')) OR
+        (limit_mode = 'HEADER' AND limit_algorithm IN ('TOKEN_BUCKET', 'LEAKY_BUCKET', 'FIXED_WINDOW', 'SLIDING_WINDOW', 'ADAPTIVE')) OR
+        (limit_mode = 'HOT_KEY' AND limit_algorithm IN ('HOT_KEY', 'TOKEN_BUCKET', 'SLIDING_WINDOW', 'ADAPTIVE')) OR
+        (limit_mode = 'CUSTOM' AND limit_algorithm = 'CUSTOM') OR
+        (limit_mode = 'QUOTA' AND limit_algorithm = 'QUOTA_LEASE') OR
+        (limit_mode = 'BANDWIDTH' AND limit_algorithm IN ('TOKEN_BUCKET', 'LEAKY_BUCKET', 'FIXED_WINDOW', 'SLIDING_WINDOW', 'ADAPTIVE')) OR
+        (limit_mode = 'CONNECTION' AND limit_algorithm IN ('CONCURRENCY_LIMIT', 'ADAPTIVE')) OR
+        (limit_mode = 'MODEL' AND limit_algorithm IN ('TOKEN_BUCKET', 'FIXED_WINDOW', 'SLIDING_WINDOW', 'CONCURRENCY_LIMIT', 'ADAPTIVE'))
+    ),
+    CONSTRAINT ck_rate_limit_rules_limit_mode_type CHECK (
+        (limit_mode = 'QPS' AND limit_type IN ('REQUEST', 'TENANT', 'USER', 'CALLER', 'API_KEY', 'RESOURCE', 'HEADER', 'GRPC_METADATA', 'IP', 'ENDPOINT', 'METHOD', 'CUSTOM_KEY')) OR
+        (limit_mode = 'CONCURRENCY' AND limit_type IN ('REQUEST', 'CONNECTION', 'TENANT', 'USER', 'CALLER', 'RESOURCE', 'ENDPOINT', 'METHOD', 'MODEL_CONCURRENCY')) OR
+        (limit_mode = 'HEADER' AND limit_type IN ('HEADER', 'GRPC_METADATA', 'TENANT', 'USER', 'CALLER', 'API_KEY', 'CUSTOM_KEY')) OR
+        (limit_mode = 'HOT_KEY' AND limit_type IN ('TENANT', 'USER', 'CALLER', 'API_KEY', 'RESOURCE', 'HEADER', 'GRPC_METADATA', 'IP', 'ENDPOINT', 'METHOD', 'TOPIC', 'CUSTOM_KEY')) OR
+        (limit_mode = 'CUSTOM') OR
+        (limit_mode = 'QUOTA' AND limit_type IN ('REQUEST', 'CONNECTION', 'BYTE', 'TENANT', 'USER', 'CALLER', 'API_KEY', 'RESOURCE', 'ENDPOINT', 'TOPIC', 'MODEL_REQUEST', 'MODEL_TOKEN', 'MODEL_COST', 'MODEL_CONCURRENCY', 'CUSTOM_KEY')) OR
+        (limit_mode = 'BANDWIDTH' AND limit_type IN ('BYTE', 'IP', 'ENDPOINT', 'USER', 'CALLER', 'TENANT', 'RESOURCE')) OR
+        (limit_mode = 'CONNECTION' AND limit_type IN ('CONNECTION', 'IP', 'ENDPOINT', 'TENANT', 'USER', 'CALLER', 'RESOURCE')) OR
+        (limit_mode = 'MODEL' AND limit_type IN ('MODEL_REQUEST', 'MODEL_TOKEN', 'MODEL_COST', 'MODEL_CONCURRENCY', 'TENANT', 'USER', 'CALLER', 'API_KEY', 'CUSTOM_KEY'))
+    ),
+    CONSTRAINT ck_rate_limit_rules_limit_mode_protocol CHECK (
+        (limit_mode = 'QPS' AND traffic_protocol IN ('HTTP', 'GRPC', 'MESSAGE', 'MODEL', 'ANY')) OR
+        (limit_mode = 'CONCURRENCY' AND traffic_protocol IN ('HTTP', 'GRPC', 'TCP', 'MODEL', 'ANY')) OR
+        (limit_mode = 'HEADER' AND traffic_protocol IN ('HTTP', 'GRPC', 'ANY')) OR
+        (limit_mode = 'HOT_KEY' AND traffic_protocol IN ('HTTP', 'GRPC', 'MESSAGE', 'MODEL', 'ANY')) OR
+        (limit_mode = 'CUSTOM') OR
+        (limit_mode = 'QUOTA') OR
+        (limit_mode = 'BANDWIDTH' AND traffic_protocol IN ('HTTP', 'GRPC', 'TCP', 'ANY')) OR
+        (limit_mode = 'CONNECTION' AND traffic_protocol IN ('HTTP', 'GRPC', 'TCP', 'ANY')) OR
+        (limit_mode = 'MODEL' AND traffic_protocol IN ('HTTP', 'MODEL', 'ANY'))
+    ),
     CONSTRAINT ck_rate_limit_rules_mode CHECK (enforcement_mode IN ('LOCAL', 'GLOBAL_SYNC', 'GLOBAL_QUOTA', 'EDGE')),
     CONSTRAINT ck_rate_limit_rules_execution_location CHECK (execution_location IN ('APPLICATION', 'SIDECAR', 'GATEWAY', 'EDGE')),
     CONSTRAINT ck_rate_limit_rules_coordination_mode CHECK (coordination_mode IN ('LOCAL_ONLY', 'GLOBAL_SYNC', 'GLOBAL_QUOTA')),
+    CONSTRAINT ck_rate_limit_rules_qps_config CHECK (limit_mode <> 'QPS' OR (quota_config ? 'limit' AND window_config ? 'durationMillis')),
+    CONSTRAINT ck_rate_limit_rules_concurrency_config CHECK (limit_mode <> 'CONCURRENCY' OR concurrency_config ? 'maxConcurrent'),
+    CONSTRAINT ck_rate_limit_rules_header_config CHECK (limit_mode <> 'HEADER' OR key_extractor ? 'keys'),
+    CONSTRAINT ck_rate_limit_rules_hotspot_config CHECK (limit_mode <> 'HOT_KEY' OR (hotspot_config ? 'topN' AND hotspot_config ? 'threshold')),
+    CONSTRAINT ck_rate_limit_rules_custom_config CHECK (limit_mode <> 'CUSTOM' OR custom_policy ? 'policyType'),
+    CONSTRAINT ck_rate_limit_rules_quota_config CHECK (limit_mode <> 'QUOTA' OR (coordination_mode = 'GLOBAL_QUOTA' AND quota_config ? 'limit')),
+    CONSTRAINT ck_rate_limit_rules_bandwidth_config CHECK (limit_mode <> 'BANDWIDTH' OR ((quota_config ->> 'unit') = 'BYTE' AND quota_config ? 'limit')),
+    CONSTRAINT ck_rate_limit_rules_connection_config CHECK (limit_mode <> 'CONNECTION' OR concurrency_config ? 'maxConcurrent'),
+    CONSTRAINT ck_rate_limit_rules_model_config CHECK (limit_mode <> 'MODEL' OR model_limit_config <> '{}'::JSONB),
     CONSTRAINT ck_rate_limit_rules_target_object CHECK (jsonb_typeof(target_selector) = 'object'),
+    CONSTRAINT ck_rate_limit_rules_request_matcher_object CHECK (jsonb_typeof(request_matcher) = 'object'),
+    CONSTRAINT ck_rate_limit_rules_key_extractor_object CHECK (jsonb_typeof(key_extractor) = 'object'),
     CONSTRAINT ck_rate_limit_rules_dimensions_array CHECK (jsonb_typeof(dimensions) = 'array'),
     CONSTRAINT ck_rate_limit_rules_quota_object CHECK (jsonb_typeof(quota_config) = 'object'),
     CONSTRAINT ck_rate_limit_rules_window_object CHECK (jsonb_typeof(window_config) = 'object'),
-    CONSTRAINT ck_rate_limit_rules_model_object CHECK (jsonb_typeof(model_limit_config) = 'object')
+    CONSTRAINT ck_rate_limit_rules_concurrency_object CHECK (jsonb_typeof(concurrency_config) = 'object'),
+    CONSTRAINT ck_rate_limit_rules_hotspot_object CHECK (jsonb_typeof(hotspot_config) = 'object'),
+    CONSTRAINT ck_rate_limit_rules_custom_object CHECK (jsonb_typeof(custom_policy) = 'object'),
+    CONSTRAINT ck_rate_limit_rules_model_object CHECK (jsonb_typeof(model_limit_config) = 'object'),
+    CONSTRAINT ck_rate_limit_rules_observability_object CHECK (jsonb_typeof(observability_config) = 'object'),
+    CONSTRAINT ck_rate_limit_rules_shadow_object CHECK (jsonb_typeof(shadow_config) = 'object')
 );
 
-COMMENT ON TABLE rate_limit_rules IS 'Typed rate limit rules including application, sidecar, gateway, edge, global sync, quota lease and model application limits.';
+COMMENT ON TABLE rate_limit_rules IS 'Enterprise rate limit rules covering QPS, concurrency, header, hotspot, custom, quota, bandwidth, connection and model limits.';
 
 CREATE TABLE auth_policy_rules (
     governance_rule_id UUID PRIMARY KEY REFERENCES governance_rules (id) ON DELETE CASCADE,
@@ -341,66 +458,6 @@ CREATE TABLE rule_validations (
 );
 
 COMMENT ON TABLE rule_validations IS 'CUE validation records before rule publishing.';
-
-CREATE TABLE rule_releases (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id VARCHAR(120) NOT NULL,
-    instance_space_id UUID NOT NULL REFERENCES instance_spaces (id) ON DELETE RESTRICT,
-    application_id UUID NOT NULL REFERENCES applications (id) ON DELETE RESTRICT,
-    release_version BIGINT NOT NULL,
-    release_name VARCHAR(160) NOT NULL,
-    release_status VARCHAR(32) NOT NULL DEFAULT 'CREATED',
-    idempotency_key VARCHAR(160),
-    source_format VARCHAR(32) NOT NULL DEFAULT 'CUE',
-    runtime_format VARCHAR(32) NOT NULL DEFAULT 'JSON',
-    schema_version VARCHAR(64) NOT NULL DEFAULT 'stellorbit.governance.v1',
-    protocol_version VARCHAR(64) NOT NULL DEFAULT 'stellorbit.runtime.protocol.v1',
-    min_client_version VARCHAR(80),
-    max_client_version VARCHAR(80),
-    compatibility_status VARCHAR(32) NOT NULL DEFAULT 'COMPATIBLE',
-    compatibility_messages JSONB NOT NULL DEFAULT '[]'::JSONB,
-    approval_status VARCHAR(32) NOT NULL DEFAULT 'NOT_REQUIRED',
-    release_snapshot_json JSONB,
-    checksum VARCHAR(128) NOT NULL,
-    rollback_from_release_id UUID REFERENCES rule_releases (id) ON DELETE RESTRICT,
-    release_note TEXT,
-    retry_count INTEGER NOT NULL DEFAULT 0,
-    max_retry_count INTEGER NOT NULL DEFAULT 3,
-    failure_details JSONB NOT NULL DEFAULT '[]'::JSONB,
-    recovery_status VARCHAR(32) NOT NULL DEFAULT 'NONE',
-    recovered_by VARCHAR(120),
-    recovered_at TIMESTAMPTZ,
-    recovery_note TEXT,
-    created_by VARCHAR(120) NOT NULL,
-    published_by VARCHAR(120),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    published_at TIMESTAMPTZ,
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    row_version BIGINT NOT NULL DEFAULT 0,
-    CONSTRAINT uk_rule_releases_version UNIQUE (tenant_id, instance_space_id, application_id, release_version),
-    CONSTRAINT uk_rule_releases_idempotency UNIQUE (tenant_id, instance_space_id, application_id, idempotency_key),
-    CONSTRAINT fk_rule_releases_tenant_space FOREIGN KEY (tenant_id, instance_space_id) REFERENCES instance_spaces (tenant_id, id) ON DELETE RESTRICT,
-    CONSTRAINT fk_rule_releases_tenant_application FOREIGN KEY (tenant_id, application_id) REFERENCES applications (tenant_id, id) ON DELETE RESTRICT,
-    CONSTRAINT ck_rule_releases_status CHECK (release_status IN ('CREATED', 'VALIDATING', 'APPROVAL_PENDING', 'APPROVED', 'REJECTED', 'CANCELED', 'PUBLISHING', 'PARTIAL_PUBLISHED', 'PUBLISHED', 'FAILED', 'ROLLED_BACK')),
-    CONSTRAINT ck_rule_releases_approval_status CHECK (approval_status IN ('NOT_REQUIRED', 'PENDING', 'APPROVED', 'REJECTED', 'CANCELED')),
-    CONSTRAINT ck_rule_releases_compatibility CHECK (compatibility_status IN ('COMPATIBLE', 'INCOMPATIBLE', 'UNKNOWN')),
-    CONSTRAINT ck_rule_releases_compatibility_messages_array CHECK (jsonb_typeof(compatibility_messages) = 'array'),
-    CONSTRAINT ck_rule_releases_source_format CHECK (source_format = 'CUE'),
-    CONSTRAINT ck_rule_releases_runtime_format CHECK (runtime_format = 'JSON'),
-    CONSTRAINT ck_rule_releases_retry CHECK (retry_count >= 0 AND max_retry_count >= 0),
-    CONSTRAINT ck_rule_releases_failure_details_array CHECK (jsonb_typeof(failure_details) = 'array'),
-    CONSTRAINT ck_rule_releases_recovery_status CHECK (recovery_status IN ('NONE', 'MANUAL_RECOVERED')),
-    CONSTRAINT ck_rule_releases_snapshot CHECK (
-        (release_status IN ('CREATED', 'VALIDATING', 'APPROVAL_PENDING', 'APPROVED', 'REJECTED', 'CANCELED', 'FAILED') AND release_snapshot_json IS NULL)
-        OR (runtime_format = 'JSON' AND release_snapshot_json IS NOT NULL)
-    )
-);
-
-COMMENT ON TABLE rule_releases IS 'Published governance release versions and full runtime snapshots.';
-
-ALTER TABLE governance_rules
-    ADD CONSTRAINT fk_governance_rules_latest_release
-    FOREIGN KEY (latest_release_id) REFERENCES rule_releases (id) ON DELETE SET NULL;
 
 CREATE TABLE release_items (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -865,8 +922,12 @@ CREATE INDEX idx_breaker_rules_type_protocol ON breaker_rules (breaker_type, pro
 CREATE INDEX idx_breaker_rules_target_gin ON breaker_rules USING GIN (target_selector);
 
 CREATE INDEX idx_rate_limit_rules_type_mode ON rate_limit_rules (limit_type, enforcement_mode);
+CREATE INDEX idx_rate_limit_rules_mode_protocol ON rate_limit_rules (limit_mode, traffic_protocol);
 CREATE INDEX idx_rate_limit_rules_type_execution_coordination ON rate_limit_rules (limit_type, execution_location, coordination_mode);
 CREATE INDEX idx_rate_limit_rules_dimensions_gin ON rate_limit_rules USING GIN (dimensions);
+CREATE INDEX idx_rate_limit_rules_request_matcher_gin ON rate_limit_rules USING GIN (request_matcher);
+CREATE INDEX idx_rate_limit_rules_key_extractor_gin ON rate_limit_rules USING GIN (key_extractor);
+CREATE INDEX idx_rate_limit_rules_hotspot_gin ON rate_limit_rules USING GIN (hotspot_config);
 CREATE INDEX idx_rate_limit_rules_model_gin ON rate_limit_rules USING GIN (model_limit_config);
 CREATE INDEX idx_auth_policy_rules_type_action ON auth_policy_rules (auth_policy_type, auth_action);
 CREATE INDEX idx_auth_policy_rules_jwt_gin ON auth_policy_rules USING GIN (jwt_rules);

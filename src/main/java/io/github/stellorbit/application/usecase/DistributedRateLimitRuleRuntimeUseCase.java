@@ -442,21 +442,30 @@ public class DistributedRateLimitRuleRuntimeUseCase {
     item.put("draftVersion", rule.getDraftVersion());
     item.put("updatedAt", text(rule.getUpdatedAt()));
     item.put("rowVersion", rule.getRowVersion());
+    item.put("limitMode", detail.getLimitMode());
     item.put("limitType", detail.getLimitType());
     item.put("limitAlgorithm", detail.getLimitAlgorithm());
+    item.put("trafficProtocol", detail.getTrafficProtocol());
     item.put("executionLocation", executionLocation);
     item.put("coordinationMode", coordinationMode);
     item.put(
         "enforcementMode",
         RateLimitRuleModeSupport.toLegacyEnforcementMode(executionLocation, coordinationMode));
     item.put("targetSelector", detail.getTargetSelector());
+    item.put("requestMatcher", detail.getRequestMatcher());
+    item.put("keyExtractor", detail.getKeyExtractor());
     item.put("dimensions", detail.getDimensions());
     item.put("quotaConfig", detail.getQuotaConfig());
     item.put("windowConfig", detail.getWindowConfig());
     item.put("burstConfig", detail.getBurstConfig());
+    item.put("concurrencyConfig", detail.getConcurrencyConfig());
+    item.put("hotspotConfig", detail.getHotspotConfig());
+    item.put("customPolicy", detail.getCustomPolicy());
     item.put("modelLimitConfig", detail.getModelLimitConfig());
     item.put("fallbackPolicy", detail.getFallbackPolicy());
     item.put("responsePolicy", detail.getResponsePolicy());
+    item.put("observabilityConfig", detail.getObservabilityConfig());
+    item.put("shadowConfig", detail.getShadowConfig());
     item.put("detailUpdatedAt", text(detail.getUpdatedAt()));
     return item;
   }

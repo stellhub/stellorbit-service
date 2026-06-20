@@ -168,7 +168,9 @@ public class StructuredGovernanceRuleContentCompiler implements GovernanceRuleCo
         RateLimitRuleModeSupport.normalizeCoordinationMode(
             detail.getCoordinationMode(), detail.getEnforcementMode());
     content.put("limitType", detail.getLimitType());
+    content.put("limitMode", detail.getLimitMode());
     content.put("limitAlgorithm", detail.getLimitAlgorithm());
+    content.put("trafficProtocol", detail.getTrafficProtocol());
     content.put("executionLocation", executionLocation);
     content.put("coordinationMode", coordinationMode);
     content.put(
@@ -178,13 +180,20 @@ public class StructuredGovernanceRuleContentCompiler implements GovernanceRuleCo
         "distributedCoordination",
         RateLimitRuleModeSupport.isDistributedCoordination(coordinationMode));
     content.put("targetSelector", detail.getTargetSelector());
+    content.put("requestMatcher", detail.getRequestMatcher());
+    content.put("keyExtractor", detail.getKeyExtractor());
     content.put("dimensions", detail.getDimensions());
     content.put("quotaConfig", detail.getQuotaConfig());
     content.put("windowConfig", detail.getWindowConfig());
     content.put("burstConfig", detail.getBurstConfig());
+    content.put("concurrencyConfig", detail.getConcurrencyConfig());
+    content.put("hotspotConfig", detail.getHotspotConfig());
+    content.put("customPolicy", detail.getCustomPolicy());
     content.put("modelLimitConfig", detail.getModelLimitConfig());
     content.put("fallbackPolicy", detail.getFallbackPolicy());
     content.put("responsePolicy", detail.getResponsePolicy());
+    content.put("observabilityConfig", detail.getObservabilityConfig());
+    content.put("shadowConfig", detail.getShadowConfig());
     return content;
   }
 

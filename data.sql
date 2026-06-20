@@ -2,7 +2,7 @@
 -- Creates one instance space, two applications, and 10 rules for each rule type.
 BEGIN;
 
-INSERT INTO stellorbit.instance_spaces (
+INSERT INTO instance_spaces (
     id,
     tenant_id,
     space_code,
@@ -46,7 +46,7 @@ ON CONFLICT (id) DO UPDATE SET
     updated_by = EXCLUDED.updated_by,
     updated_at = NOW();
 
-INSERT INTO stellorbit.applications (
+INSERT INTO applications (
     id,
     tenant_id,
     instance_space_id,
@@ -117,7 +117,7 @@ route_rows AS (
         lpad(i::text, 2, '0') AS n
     FROM seed
 )
-INSERT INTO stellorbit.governance_rules (
+INSERT INTO governance_rules (
     id,
     tenant_id,
     instance_space_id,
@@ -186,7 +186,7 @@ WITH route_rows AS (
     SELECT
         generate_series(1, 10) AS i
 )
-INSERT INTO stellorbit.route_rules (
+INSERT INTO route_rules (
     governance_rule_id,
     route_type,
     traffic_direction,
@@ -265,7 +265,7 @@ breaker_rows AS (
         lpad(i::text, 2, '0') AS n
     FROM seed
 )
-INSERT INTO stellorbit.governance_rules (
+INSERT INTO governance_rules (
     id,
     tenant_id,
     instance_space_id,
@@ -333,7 +333,7 @@ ON CONFLICT (id) DO UPDATE SET
 WITH breaker_rows AS (
     SELECT generate_series(1, 10) AS i
 )
-INSERT INTO stellorbit.breaker_rules (
+INSERT INTO breaker_rules (
     governance_rule_id,
     breaker_type,
     protocol,
@@ -412,7 +412,7 @@ rate_rows AS (
         lpad(i::text, 2, '0') AS n
     FROM seed
 )
-INSERT INTO stellorbit.governance_rules (
+INSERT INTO governance_rules (
     id,
     tenant_id,
     instance_space_id,
@@ -505,52 +505,92 @@ rate_rows AS (
         END AS enforcement_mode
     FROM rate_modes
 )
-INSERT INTO stellorbit.rate_limit_rules (
+INSERT INTO rate_limit_rules (
     governance_rule_id,
+    limit_mode,
     limit_type,
     limit_algorithm,
+    traffic_protocol,
     enforcement_mode,
     execution_location,
     coordination_mode,
     target_selector,
+    request_matcher,
+    key_extractor,
     dimensions,
     quota_config,
     window_config,
     burst_config,
+    concurrency_config,
+    hotspot_config,
+    custom_policy,
     model_limit_config,
     fallback_policy,
-    response_policy
+    response_policy,
+    observability_config,
+    shadow_config
 )
 SELECT
     ('30000000-0000-0000-0000-' || lpad(i::text, 12, '0'))::uuid,
-    (ARRAY['REQUEST','CONNECTION','BYTE','TENANT','USER','CALLER','API_KEY','RESOURCE','MODEL_REQUEST','MODEL_TOKEN'])[((i - 1) % 10) + 1],
-    (ARRAY['TOKEN_BUCKET','LEAKY_BUCKET','FIXED_WINDOW','SLIDING_WINDOW','QUOTA_LEASE'])[((i - 1) % 5) + 1],
+    (ARRAY['QPS','CONCURRENCY','HEADER','HOT_KEY','CUSTOM','QUOTA','BANDWIDTH','CONNECTION','MODEL','MODEL'])[((i - 1) % 10) + 1],
+    (ARRAY['REQUEST','CONNECTION','HEADER','RESOURCE','CUSTOM_KEY','TENANT','BYTE','CONNECTION','MODEL_REQUEST','MODEL_TOKEN'])[((i - 1) % 10) + 1],
+    (ARRAY['TOKEN_BUCKET','CONCURRENCY_LIMIT','SLIDING_WINDOW','HOT_KEY','CUSTOM','QUOTA_LEASE','LEAKY_BUCKET','CONCURRENCY_LIMIT','TOKEN_BUCKET','SLIDING_WINDOW'])[((i - 1) % 10) + 1],
+    (ARRAY['HTTP','HTTP','GRPC','HTTP','ANY','ANY','HTTP','TCP','MODEL','MODEL'])[((i - 1) % 10) + 1],
     enforcement_mode,
     execution_location,
     coordination_mode,
     jsonb_build_object('service', CASE WHEN i <= 5 THEN 'order-service' ELSE 'payment-service' END, 'path', '/api/v1/demo/' || i),
-    jsonb_build_array('tenantId', 'userId', 'apiKey'),
-    jsonb_build_object('limit', 1000 + i * 100, 'unit', 'REQUEST'),
-    jsonb_build_object('windowSeconds', 60, 'refillSeconds', 1),
-    jsonb_build_object('burst', 100 + i * 10),
+    jsonb_build_object(
+        'http', jsonb_build_object('methods', jsonb_build_array('GET', 'POST'), 'pathPattern', '/api/v1/demo/{id}'),
+        'grpc', jsonb_build_object('service', 'demo.RateLimitService', 'method', 'Check' || i)
+    ),
+    jsonb_build_object(
+        'strategy', 'COMPOSITE',
+        'failOnMissing', false,
+        'keys', jsonb_build_array(
+            jsonb_build_object('name', 'tenant', 'source', CASE WHEN i = 3 THEN 'GRPC_METADATA' ELSE 'HEADER' END, 'key', 'x-tenant-id', 'required', true),
+            jsonb_build_object('name', 'api', 'source', CASE WHEN i = 3 THEN 'GRPC_METHOD' ELSE 'HTTP_PATH' END, 'key', 'pathTemplate')
+        )
+    ),
+    jsonb_build_array(
+        jsonb_build_object('name', 'tenant', 'source', CASE WHEN i = 3 THEN 'GRPC_METADATA' ELSE 'HEADER' END, 'key', 'x-tenant-id'),
+        jsonb_build_object('name', 'api', 'source', CASE WHEN i = 3 THEN 'GRPC_METHOD' ELSE 'HTTP_PATH' END, 'key', 'pathTemplate')
+    ),
+    jsonb_build_object('limit', 1000 + i * 100, 'unit', CASE WHEN i = 7 THEN 'BYTE' ELSE 'REQUEST' END, 'period', 'SECOND', 'scope', 'PER_KEY'),
+    jsonb_build_object('windowType', 'SLIDING', 'durationMillis', 60000, 'bucketCount', 60, 'refillSeconds', 1),
+    jsonb_build_object('capacity', 100 + i * 10, 'refillRate', 1000 + i * 100, 'maxBurstRatio', 1.5),
+    jsonb_build_object('maxConcurrent', 50 + i, 'queueLimit', 100, 'queueTimeoutMillis', 200, 'releaseOn', 'RESPONSE_COMPLETED'),
+    jsonb_build_object('enabled', true, 'metric', 'QPS', 'topN', 100, 'threshold', 1000 + i * 100, 'ttlMillis', 60000),
+    jsonb_build_object('policyType', 'EXPRESSION', 'language', 'CEL', 'expression', 'request.tenant + ":" + request.path', 'timeoutMillis', 20, 'failPolicy', 'FAIL_OPEN'),
     jsonb_build_object('provider', 'openai-compatible', 'model', 'demo-model-' || i, 'tokenLimit', 10000 + i * 1000),
     jsonb_build_object('mode', CASE WHEN i % 2 = 0 THEN 'FAIL_OPEN' ELSE 'FAIL_CLOSED' END),
-    jsonb_build_object('status', 429, 'message', 'too many requests')
+    jsonb_build_object('httpStatus', 429, 'grpcStatus', 'RESOURCE_EXHAUSTED', 'message', 'too many requests'),
+    jsonb_build_object('metricLabels', jsonb_build_array('tenant', 'api'), 'logRejected', true, 'sampleAllowedRatio', 0.01),
+    jsonb_build_object('enabled', i = 5, 'mode', 'DRY_RUN')
 FROM rate_rows
 ON CONFLICT (governance_rule_id) DO UPDATE SET
+    limit_mode = EXCLUDED.limit_mode,
     limit_type = EXCLUDED.limit_type,
     limit_algorithm = EXCLUDED.limit_algorithm,
+    traffic_protocol = EXCLUDED.traffic_protocol,
     enforcement_mode = EXCLUDED.enforcement_mode,
     execution_location = EXCLUDED.execution_location,
     coordination_mode = EXCLUDED.coordination_mode,
     target_selector = EXCLUDED.target_selector,
+    request_matcher = EXCLUDED.request_matcher,
+    key_extractor = EXCLUDED.key_extractor,
     dimensions = EXCLUDED.dimensions,
     quota_config = EXCLUDED.quota_config,
     window_config = EXCLUDED.window_config,
     burst_config = EXCLUDED.burst_config,
+    concurrency_config = EXCLUDED.concurrency_config,
+    hotspot_config = EXCLUDED.hotspot_config,
+    custom_policy = EXCLUDED.custom_policy,
     model_limit_config = EXCLUDED.model_limit_config,
     fallback_policy = EXCLUDED.fallback_policy,
     response_policy = EXCLUDED.response_policy,
+    observability_config = EXCLUDED.observability_config,
+    shadow_config = EXCLUDED.shadow_config,
     updated_at = NOW();
 
 WITH seed AS (
@@ -572,7 +612,7 @@ auth_rows AS (
         lpad(i::text, 2, '0') AS n
     FROM seed
 )
-INSERT INTO stellorbit.governance_rules (
+INSERT INTO governance_rules (
     id,
     tenant_id,
     instance_space_id,
@@ -640,7 +680,7 @@ ON CONFLICT (id) DO UPDATE SET
 WITH auth_rows AS (
     SELECT generate_series(1, 10) AS i
 )
-INSERT INTO stellorbit.auth_policy_rules (
+INSERT INTO auth_policy_rules (
     governance_rule_id,
     auth_policy_type,
     auth_action,
