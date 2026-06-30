@@ -70,57 +70,63 @@ public class CueSchemaRegistry {
       strategy?: #NonEmptyString
       failOnMissing?: bool
       hash?: #Object
-      keys: [...{
+      keys?: [...{
         name: #NonEmptyString
         source: #KeyExtractorSource
         key: #NonEmptyString
         required?: bool
         normalize?: #NonEmptyString
       }]
+      ...
     }
     #QuotaConfig: {
-      limit: number & >0
-      unit: #NonEmptyString
+      limit?: number & >0
+      unit?: #NonEmptyString
       period?: #NonEmptyString
       scope?: #NonEmptyString
       warmup?: #Object
+      ...
     }
     #WindowConfig: {
-      windowType: #NonEmptyString
+      windowType?: #NonEmptyString
       durationMillis?: int & >0
       bucketCount?: int & >0
       precisionMillis?: int & >0
       refillSeconds?: int & >0
+      ...
     }
     #ConcurrencyConfig: {
-      maxConcurrent: int & >0
+      maxConcurrent?: int & >0
       queueLimit?: int & >=0
       queueTimeoutMillis?: int & >=0
       adaptive?: bool
       releaseOn?: #NonEmptyString
+      ...
     }
     #HotspotConfig: {
       enabled?: bool
       metric?: #NonEmptyString
-      topN: int & >0
-      threshold: number & >0
+      topN?: int & >0
+      threshold?: number & >0
       ttlMillis?: int & >0
       adaptive?: bool
       isolation?: #Object
       degradePolicy?: #Object
       sharding?: #Object
+      ...
     }
     #CustomPolicy: {
-      policyType: "EXPRESSION" | "SCRIPT" | "PLUGIN" | "EXTERNAL_SERVICE"
+      policyType?: "EXPRESSION" | "SCRIPT" | "PLUGIN" | "EXTERNAL_SERVICE"
       language?: #NonEmptyString
       expression?: #NonEmptyString
       script?: #NonEmptyString
       pluginName?: #NonEmptyString
       pluginVersion?: #NonEmptyString
       endpoint?: #NonEmptyString
-      timeoutMillis: int & >0
-      failPolicy: #NonEmptyString
+      timeoutMillis?: int & >0
+      failPolicy?: #NonEmptyString
       parameters?: #Object
+      ...
     }
     #ModelLimitConfig: {
       provider?: #NonEmptyString
@@ -130,6 +136,7 @@ public class CueSchemaRegistry {
       costLimit?: number & >0
       maxConcurrent?: int & >0
       contextLimit?: int & >0
+      ...
     }
 
     #CommonRule: {
@@ -217,15 +224,15 @@ public class CueSchemaRegistry {
       distributedCoordination: *false | bool
       targetSelector: #Object
       requestMatcher: *{} | #Object
-      keyExtractor: *{} | #KeyExtractor
+      keyExtractor: #KeyExtractor
       dimensions: #Array
-      quotaConfig: #Object | #QuotaConfig
-      windowConfig: #Object | #WindowConfig
+      quotaConfig: #QuotaConfig
+      windowConfig: #WindowConfig
       burstConfig: *{} | #Object
-      concurrencyConfig: *{} | #ConcurrencyConfig
-      hotspotConfig: *{} | #HotspotConfig
-      customPolicy: *{} | #CustomPolicy
-      modelLimitConfig: *{} | #ModelLimitConfig
+      concurrencyConfig: #ConcurrencyConfig
+      hotspotConfig: #HotspotConfig
+      customPolicy: #CustomPolicy
+      modelLimitConfig: #ModelLimitConfig
       fallbackPolicy: *{} | #Object
       responsePolicy: *{} | #Object
       observabilityConfig: *{} | #Object
